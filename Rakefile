@@ -14,3 +14,12 @@ require "rubocop/rake_task"
 RuboCop::RakeTask.new
 
 task default: %i[test rubocop]
+
+require "rake/extensiontask"
+Rake::ExtensionTask.new("core") do |ext|
+  ext.lib_dir = 'lib/tokdiff'
+end
+
+task :console do
+  exec "irb -I lib -r tokdiff"
+end
