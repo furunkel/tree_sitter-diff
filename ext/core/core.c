@@ -20,7 +20,7 @@ typedef struct {
   uint32_t capa;
   uint32_t len;
   st_data_t *entries;
-} IndexList;
+} IndexValue;
 
 typedef struct {
   uint32_t start_byte;
@@ -37,7 +37,7 @@ typedef struct {
   uint32_t start_byte;
   uint32_t end_byte;
   const char *input;
-} TableEntry;
+} IndexKey;
 
 typedef struct {
   VALUE rb_input;
@@ -56,7 +56,7 @@ static void token_mark(void *ptr) {
   rb_gc_mark(token->rb_change_set);
 }
 
-const rb_data_type_t token_type = {
+static const rb_data_type_t token_type = {
     .wrap_struct_name = "Token",
     .function = {
         .dmark = token_mark,
@@ -80,7 +80,7 @@ static void change_set_mark(void *ptr) {
   rb_gc_mark(change_set->rb_input);
 }
 
-const rb_data_type_t change_set_type = {
+static const rb_data_type_t change_set_type = {
     .wrap_struct_name = "ChangeSet",
     .function = {
         .dmark = change_set_mark,
@@ -359,8 +359,8 @@ add_token:
 
 
 static st_index_t
-table_entry_hash(st_data_t arg) {
-  TableEntry *table_entry = (TableEntry *) arg;
+index_key_hash(st_data_t arg) {
+  IndexKey *table_entry = (IndexKey *) arg;
 
   uint32_t start_byte = table_entry->start_byte;
   uint32_t end_byte = table_entry->end_byte;
@@ -372,9 +372,9 @@ table_entry_hash(st_data_t arg) {
 }
 
 static int
-table_entry_cmp(st_data_t x, st_data_t y) {
-  TableEntry *table_entry_x = (TableEntry *) x;
-  TableEntry *table_entry_y = (TableEntry *) y;
+index_key_cmp(st_data_t x, st_data_t y) {
+  IndexKey *table_entry_x = (IndexKey *) x;
+  IndexKey *table_entry_y = (IndexKey *) y;
 
   uint32_t start_byte_x = table_entry_x->start_byte;
   uint32_t end_byte_x = table_entry_x->end_byte;
@@ -394,13 +394,13 @@ table_entry_cmp(st_data_t x, st_data_t y) {
   }
 }
 
-static const struct st_hash_type type_table_entry_hash = {
-    table_entry_cmp,
-    table_entry_hash,
+static const struct st_hash_type type_index_key_hash = {
+    index_key_cmp,
+    index_key_hash,
 };
 
 // static IndexListEntry *
-// index_list_request_entry(IndexList *index_list) {
+// index_list_request_entry(IndexValue *index_list) {
 //   if(!(index_list->len < index_list->capa)) {
 //     uint32_t new_capa = 2 * index_list->capa;
 //     RB_REALLOC_N(index_list->entries, IndexListEntry, new_capa);
@@ -413,7 +413,7 @@ static const struct st_hash_type type_table_entry_hash = {
 
 
 static uint32_t
-index_list_append(IndexList *index_list, st_data_t pair) {
+index_list_append(IndexValue *index_list, st_data_t pair) {
   if(!(index_list->len < index_list->capa)) {
     uint32_t new_capa = 2 * index_list->capa;
     RB_REALLOC_N(index_list->entries, st_data_t, new_capa);
@@ -449,7 +449,7 @@ index_list_append(IndexList *index_list, st_data_t pair) {
 // }
 
 typedef struct {
-  IndexList *index_list;
+  IndexValue *index_list;
   uint32_t value;
 } UpdateArg;
 
@@ -459,9 +459,10 @@ _Static_assert(sizeof(st_data_t) >= 2 * sizeof(uint32_t));
 #define PAIR64_FIRST(p) ((p) & 0xFFFFFFFF)
 #define PAIR64_SECOND(p) ((p) >> 32)
 
-int update_callback(st_data_t *key, st_data_t *value, st_data_t arg, int existing) {
+static int
+update_callback(st_data_t *key, st_data_t *value, st_data_t arg, int existing) {
   UpdateArg *update_arg = (UpdateArg *) arg;
-  IndexList *index_list = update_arg->index_list;
+  IndexValue *index_list = update_arg->index_list;
   uint32_t insert_value = update_arg->value;
 
   if(!existing) {
@@ -487,8 +488,9 @@ rb_new_change_set(change_type_t change_type, VALUE rb_input, Token *tokens, size
   return TypedData_Wrap_Struct(rb_cChangeSet, &change_set_type, change_set);
 }
 
+// Loosely based on https://github.com/paulgb/simplediff
 static void
-node_diff(Token *tokens_old, Token *tokens_new, IndexList *index_list, TableEntry *table_entries_old, st_table *overlap,
+token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKey *table_entries_old, st_table *overlap,
           st_table *_overlap, st_table *old_index_map, VALUE rb_input_old, VALUE rb_input_new,
           uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new, VALUE rb_out_ary, bool output_eq) {
 
@@ -504,7 +506,7 @@ node_diff(Token *tokens_old, Token *tokens_new, IndexList *index_list, TableEntr
   for(size_t iold = start_old; iold < start_old + len_old; iold++) {
     Token *token = &tokens_old[iold];
 
-    TableEntry *key = &table_entries_old[iold];
+    IndexKey *key = &table_entries_old[iold];
     key->start_byte = token->start_byte;
     key->end_byte = token->end_byte;
     key->input = input_old;
@@ -523,7 +525,7 @@ node_diff(Token *tokens_old, Token *tokens_new, IndexList *index_list, TableEntr
 
       assert(_overlap->num_entries == 0);
 
-      TableEntry key = {
+      IndexKey key = {
         .start_byte = token->start_byte,
         .end_byte = token->end_byte,
         .input = input_new
@@ -592,7 +594,7 @@ node_diff(Token *tokens_old, Token *tokens_new, IndexList *index_list, TableEntr
     assert(sub_start_old >= start_old);
     assert(sub_start_new >= start_new);
 
-    node_diff(tokens_old, tokens_new, index_list, table_entries_old, overlap, _overlap, old_index_map, rb_input_old, rb_input_new,
+    token_diff(tokens_old, tokens_new, index_list, table_entries_old, overlap, _overlap, old_index_map, rb_input_old, rb_input_new,
               start_old, sub_start_old - start_old,
               start_new, sub_start_new - start_new,
               rb_out_ary, output_eq);
@@ -607,7 +609,7 @@ node_diff(Token *tokens_old, Token *tokens_new, IndexList *index_list, TableEntr
     st_clear(old_index_map);
     index_list->len = 0;
 
-    node_diff(tokens_old, tokens_new, index_list, table_entries_old, overlap, _overlap, old_index_map, rb_input_old, rb_input_new,
+    token_diff(tokens_old, tokens_new, index_list, table_entries_old, overlap, _overlap, old_index_map, rb_input_old, rb_input_new,
               sub_start_old + sub_length, (start_old + len_old) - (sub_start_old + sub_length),
               sub_start_new + sub_length, (start_new + len_new) - (sub_start_new + sub_length),
               rb_out_ary, output_eq);
@@ -694,20 +696,20 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new, VALUE rb_output_eq) {
   Token *tokens_old = tokens;
   Token *tokens_new = tokens + tokens_old_len;
 
-  TableEntry *table_entries_old = RB_ALLOC_N(TableEntry, tokens_old_len);
+  IndexKey *table_entries_old = RB_ALLOC_N(IndexKey, tokens_old_len);
 
-  IndexList index_list;
+  IndexValue index_list;
   index_list.capa = tokens_old_len;
   index_list.len = 0;
   index_list.entries = RB_ALLOC_N(st_data_t, index_list.capa);
 
-  VALUE rb_out_ary = rb_ary_new_capa(MAX(tokens_old_len, tokens_new_len));
+  VALUE rb_out_ary = rb_ary_new();
 
   st_table *overlap = st_init_numtable();
   st_table *_overlap = st_init_numtable();
-  st_table *old_index_map = st_init_table(&type_table_entry_hash);
+  st_table *old_index_map = st_init_table(&type_index_key_hash);
 
-  node_diff(tokens_old, tokens_new, &index_list, table_entries_old, overlap, _overlap, old_index_map,
+  token_diff(tokens_old, tokens_new, &index_list, table_entries_old, overlap, _overlap, old_index_map,
             rb_old, rb_new, 0, tokens_old_len, 0, tokens_new_len, rb_out_ary, output_eq);
 
   st_free_table(overlap);
