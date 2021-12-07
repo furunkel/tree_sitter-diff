@@ -790,7 +790,7 @@ Init_core()
   rb_mTokdiff = rb_define_module("Tokdiff");
   rb_eTokdiffError = rb_define_class_under(rb_mTokdiff, "Error", rb_eStandardError);
 
-  rb_define_singleton_method(rb_mTokdiff, "diff", rb_tokdiff_diff_s, 3);
+  rb_define_singleton_method(rb_mTokdiff, "__diff__", rb_tokdiff_diff_s, 3);
 
   rb_cChangeSet = rb_define_class_under(rb_mTokdiff, "ChangeSet", rb_cObject);
   rb_cToken = rb_define_class_under(rb_mTokdiff, "Token", rb_cObject);

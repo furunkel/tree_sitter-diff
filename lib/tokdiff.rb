@@ -4,6 +4,11 @@ require_relative 'tokdiff/version'
 require_relative 'tokdiff/core'
 
 module Tokdiff
+
+  def self.diff(old, new, output_equal: false)
+    __diff__ old, new, output_equal
+  end
+
   class Token
     def inspect
       %Q(#<#{self.class} "#{text}">)
