@@ -112,7 +112,7 @@ typedef enum {
 } change_type_t;
 
 static void
-tokenize(const char *input, size_t input_len, Token **tokens, size_t *tokens_len, size_t *tokens_capa) {
+tokenize(const char *input, size_t input_len, Token **tokens, size_t *tokens_len, size_t *tokens_capa, bool ignore_whitespace) {
   uint32_t last_token_pos = 0;
   uint16_t prev_char_type = CHAR_TYPE_INVALID;
   bool flush = false;
@@ -135,9 +135,6 @@ tokenize(const char *input, size_t input_len, Token **tokens, size_t *tokens_len
       case '\a':
       case '\b':
         char_type = CHAR_TYPE_OTHER;
-        break;
-      case '\t':
-        char_type = CHAR_TYPE_SPACE;
         break;
       case '\n':
         char_type = CHAR_TYPE_LINE;
@@ -169,6 +166,7 @@ tokenize(const char *input, size_t input_len, Token **tokens, size_t *tokens_len
       case '\x1F':
         char_type = CHAR_TYPE_OTHER;
         break;
+      case '\t':
       case ' ':
         char_type = CHAR_TYPE_SPACE;
         break;
@@ -339,6 +337,10 @@ add_token:
         *tokens_capa = new_tokens_capa;
       }
 
+      if(ignore_whitespace && (prev_char_type == CHAR_TYPE_SPACE || prev_char_type == CHAR_TYPE_LINE)) {
+        goto next;
+      }
+
       Token *token = &(*tokens)[*tokens_len];
       (*tokens_len)++;
 
@@ -353,6 +355,7 @@ add_token:
       last_token_pos = i;
     }
 
+next:
     prev_char_type = char_type;
   }
 }
@@ -675,7 +678,7 @@ rb_change_set_type(VALUE self) {
 }
 
 static VALUE
-rb_tokdiff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new, VALUE rb_output_eq) {
+rb_tokdiff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new, VALUE rb_output_eq, VALUE rb_ignore_whitespace) {
   Check_Type(rb_old, T_STRING);
   Check_Type(rb_new, T_STRING);
 
@@ -683,13 +686,16 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new, VALUE rb_output_eq) {
   size_t tokens_len = 0;
   size_t tokens_old_len = 0;
   size_t tokens_new_len = 0;
-  Token *tokens = RB_ALLOC_N(Token, tokens_capa);
-  tokenize(RSTRING_PTR(rb_old), RSTRING_LEN(rb_old), &tokens, &tokens_len, &tokens_capa);
+
   bool output_eq = RB_TEST(rb_output_eq);
+  bool ignore_whitespace = RB_TEST(rb_ignore_whitespace);
+
+  Token *tokens = RB_ALLOC_N(Token, tokens_capa);
+  tokenize(RSTRING_PTR(rb_old), RSTRING_LEN(rb_old), &tokens, &tokens_len, &tokens_capa, ignore_whitespace);
 
   tokens_old_len = tokens_len;
 
-  tokenize(RSTRING_PTR(rb_new), RSTRING_LEN(rb_new), &tokens, &tokens_len, &tokens_capa);
+  tokenize(RSTRING_PTR(rb_new), RSTRING_LEN(rb_new), &tokens, &tokens_len, &tokens_capa, ignore_whitespace);
 
   tokens_new_len = tokens_len - tokens_old_len;
 
@@ -790,7 +796,7 @@ Init_core()
   rb_mTokdiff = rb_define_module("Tokdiff");
   rb_eTokdiffError = rb_define_class_under(rb_mTokdiff, "Error", rb_eStandardError);
 
-  rb_define_singleton_method(rb_mTokdiff, "__diff__", rb_tokdiff_diff_s, 3);
+  rb_define_singleton_method(rb_mTokdiff, "__diff__", rb_tokdiff_diff_s, 4);
 
   rb_cChangeSet = rb_define_class_under(rb_mTokdiff, "ChangeSet", rb_cObject);
   rb_cToken = rb_define_class_under(rb_mTokdiff, "Token", rb_cObject);

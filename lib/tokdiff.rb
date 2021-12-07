@@ -5,8 +5,8 @@ require_relative 'tokdiff/core'
 
 module Tokdiff
 
-  def self.diff(old, new, output_equal: false)
-    __diff__ old, new, output_equal
+  def self.diff(old, new, output_equal: false, ignore_whitespace: true)
+    __diff__ old, new, output_equal, ignore_whitespace
   end
 
   class Token
