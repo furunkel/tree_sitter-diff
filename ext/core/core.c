@@ -11,9 +11,14 @@ VALUE rb_eTokdiffError;
 static ID id_eq;
 static ID id_add;
 static ID id_del;
+static ID id_mod;
 
 #ifndef MAX
 #define MAX(a,b) (((a)<(b))?(b):(a))
+#endif
+
+#ifndef MIN
+#define MIN(a,b) (((a)>(b))?(b):(a))
 #endif
 
 typedef struct {
@@ -29,7 +34,7 @@ typedef struct {
 } Token;
 
 typedef struct {
-  VALUE rb_change_set;
+  VALUE rb_input;
   Token token;
 } RbToken;
 
@@ -40,7 +45,8 @@ typedef struct {
 } IndexKey;
 
 typedef struct {
-  VALUE rb_input;
+  VALUE rb_old_input;
+  VALUE rb_new_input;
   Token *tokens;
   uint32_t len;
   uint8_t change_type;
@@ -53,7 +59,7 @@ static void token_free(void *ptr)
 
 static void token_mark(void *ptr) {
   RbToken *token = (RbToken *) ptr;
-  rb_gc_mark(token->rb_change_set);
+  rb_gc_mark(token->rb_input);
 }
 
 static const rb_data_type_t token_type = {
@@ -77,7 +83,8 @@ static void change_set_free(void *ptr)
 
 static void change_set_mark(void *ptr) {
   ChangeSet *change_set = (ChangeSet *) ptr;
-  rb_gc_mark(change_set->rb_input);
+  rb_gc_mark(change_set->rb_old_input);
+  rb_gc_mark(change_set->rb_old_input);
 }
 
 static const rb_data_type_t change_set_type = {
@@ -109,6 +116,7 @@ typedef enum {
   CHANGE_TYPE_ADD,
   CHANGE_TYPE_DEL,
   CHANGE_TYPE_EQL,
+  CHANGE_TYPE_MOD,
 } change_type_t;
 
 static void
@@ -136,14 +144,13 @@ tokenize(const char *input, size_t input_len, Token **tokens, size_t *tokens_len
       case '\b':
         char_type = CHAR_TYPE_OTHER;
         break;
-      case '\n':
-        char_type = CHAR_TYPE_LINE;
         break;
       case '\v':
       case '\f':
         char_type = CHAR_TYPE_OTHER;
         break;
       case '\r':
+      case '\n':
         char_type = CHAR_TYPE_LINE;
         break;
       case '\x0E':
@@ -347,15 +354,15 @@ add_token:
       token->start_byte = last_token_pos;
       token->end_byte = i;
 
-      // fprintf(stderr, "TOKEN: %.*s (%d-%d)\n", i - last_token_pos, input + last_token_pos, last_token_pos, i);
+      // fprintf(stderr, "TOKEN: '%.*s' (%d-%d)\n", i - last_token_pos, input + last_token_pos, last_token_pos, i);
       
       token->type = prev_char_type;
 
+next:
       flush = false;
       last_token_pos = i;
     }
 
-next:
     prev_char_type = char_type;
   }
 }
@@ -479,17 +486,43 @@ update_callback(st_data_t *key, st_data_t *value, st_data_t arg, int existing) {
 }
 
 static VALUE
-rb_new_change_set(change_type_t change_type, VALUE rb_input, Token *tokens, size_t start, size_t len)
+rb_change_set_new_full(change_type_t change_type, VALUE rb_old_input, VALUE rb_new_input,
+                       Token *old_tokens, size_t old_start, size_t old_len,
+                       Token *new_tokens, size_t new_start, size_t new_len)
 {
   ChangeSet *change_set = RB_ALLOC(ChangeSet);
   change_set->change_type = change_type;
-  change_set->rb_input = rb_input;
-  change_set->len = len;
-  change_set->tokens = RB_ALLOC_N(Token, len);
-  memcpy(change_set->tokens, tokens + start, len * sizeof(Token));
+  change_set->rb_old_input = rb_old_input;
+  change_set->rb_new_input = rb_new_input;
+  change_set->len = MAX(old_len, new_len);
+
+  assert(old_len == 0 || new_len == 0 || old_len == new_len);
+  change_set->tokens = RB_ALLOC_N(Token, old_len + new_len);
+
+  memcpy(change_set->tokens, old_tokens + old_start, old_len * sizeof(Token));
+  memcpy(change_set->tokens + old_len, new_tokens + new_start, new_len * sizeof(Token));
   
   return TypedData_Wrap_Struct(rb_cChangeSet, &change_set_type, change_set);
 }
+
+static VALUE
+rb_change_set_new(change_type_t change_type, VALUE rb_input,
+                  Token *tokens, size_t start, size_t len)
+{
+  switch(change_type) {
+    case CHANGE_TYPE_DEL:
+      return rb_change_set_new_full(change_type, rb_input, Qnil,
+                        tokens, start, len,
+                        NULL, 0, 0);
+    case CHANGE_TYPE_ADD:
+      return rb_change_set_new_full(change_type, Qnil, rb_input,
+                        NULL, 0, 0,
+                        tokens, start, len);
+    default:
+      return Qnil;                        
+  }
+}
+
 
 // Loosely based on https://github.com/paulgb/simplediff
 static void
@@ -579,12 +612,23 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
   }
 
   if(sub_length == 0) {
+    size_t common_len = MIN(len_old, len_new);
+    if(common_len > 0) {
+      rb_ary_push(rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_MOD, rb_input_old, rb_input_new,
+                                                     tokens_old, start_old, common_len,
+                                                     tokens_new, start_new, common_len));
+      start_old += common_len;
+      start_new += common_len;
+      len_old -= common_len;
+      len_new -= common_len;
+    }
+
     if(len_old > 0) {
-      rb_ary_push(rb_out_ary, rb_new_change_set(CHANGE_TYPE_DEL, rb_input_old, tokens_old, start_old, len_old));
+      rb_ary_push(rb_out_ary, rb_change_set_new(CHANGE_TYPE_DEL, rb_input_old, tokens_old, start_old, len_old));
     }
 
     if(len_new > 0) {
-      rb_ary_push(rb_out_ary, rb_new_change_set(CHANGE_TYPE_ADD, rb_input_new, tokens_new, start_new, len_new));
+      rb_ary_push(rb_out_ary, rb_change_set_new(CHANGE_TYPE_ADD, rb_input_new, tokens_new, start_new, len_new));
     }
   } else {
     st_clear(_overlap);
@@ -604,7 +648,9 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
 
 
     if(output_eq) {
-      rb_ary_push(rb_out_ary, rb_new_change_set(CHANGE_TYPE_EQL, rb_input_new, tokens_new, sub_start_new, sub_length));
+      rb_ary_push(rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_EQL, rb_input_old, rb_input_new,
+                                                     tokens_old, sub_start_old, sub_length,
+                                                     tokens_new, sub_start_new, sub_length));
     }
 
     st_clear(_overlap);
@@ -621,11 +667,33 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
 }
 
 static VALUE
-rb_new_token(VALUE rb_change_set, Token *token_) {
+rb_token_new(VALUE rb_input, Token *token_) {
   RbToken *token = RB_ALLOC(RbToken);
-  token->rb_change_set = rb_change_set;
+  Check_Type(rb_input, T_STRING);
+  token->rb_input = rb_input;
   token->token = *token_;
   return TypedData_Wrap_Struct(rb_cToken, &token_type, token);
+}
+
+
+static void
+rb_change_set_get(ChangeSet *change_set, long index, VALUE *rb_old_token, VALUE *rb_new_token) {
+  *rb_old_token = Qnil;
+  *rb_new_token = Qnil;
+
+  switch(change_set->change_type) {
+    case CHANGE_TYPE_EQL:
+    case CHANGE_TYPE_MOD:
+      *rb_old_token = rb_token_new(change_set->rb_old_input, &change_set->tokens[index]);
+      *rb_new_token = rb_token_new(change_set->rb_new_input, &change_set->tokens[change_set->len + index]);
+      break;
+    case CHANGE_TYPE_DEL:
+      *rb_old_token = rb_token_new(change_set->rb_old_input, &change_set->tokens[index]);
+      break;
+    case CHANGE_TYPE_ADD:
+      *rb_new_token = rb_token_new(change_set->rb_new_input, &change_set->tokens[index]);
+      break;
+  }
 }
 
 static VALUE
@@ -642,7 +710,17 @@ rb_change_set_aref(VALUE self, VALUE rb_index) {
     return Qnil;
   }
 
-  return rb_new_token(self, &change_set->tokens[FIX2INT(rb_index)]);
+  VALUE rb_old_token;
+  VALUE rb_new_token;
+
+  rb_change_set_get(change_set, index, &rb_old_token, &rb_new_token);
+  if(!NIL_P(rb_old_token) && !NIL_P(rb_new_token)) {
+    return rb_assoc_new(rb_old_token, rb_new_token);
+  } else if(!NIL_P(rb_old_token)) {
+    return rb_old_token;
+  } else {
+    return rb_new_token;
+  }
 }
 
 static VALUE
@@ -669,6 +747,9 @@ rb_change_set_type(VALUE self) {
       break;
     case CHANGE_TYPE_EQL:
       type_id = id_eq;
+      break;
+    case CHANGE_TYPE_MOD:
+      type_id = id_mod;
       break;
     default:
       return Qnil;
@@ -746,10 +827,7 @@ rb_token_text(VALUE self) {
   uint32_t start_byte = token->token.start_byte;
   uint32_t end_byte = token->token.end_byte;
 
-  ChangeSet *change_set;
-  TypedData_Get_Struct(token->rb_change_set, ChangeSet, &change_set_type, change_set);
-
-  VALUE rb_input = change_set->rb_input;
+  VALUE rb_input = token->rb_input;
   const char *input = RSTRING_PTR(rb_input);
   size_t input_len = RSTRING_LEN(rb_input);
 
@@ -780,8 +858,10 @@ rb_change_set_each(VALUE self)
   RETURN_SIZED_ENUMERATOR(self, 0, 0, change_set_enum_length);
 
   for(uint32_t i = 0; i < change_set->len; i++) {
-    VALUE rb_token = rb_new_token(self, &change_set->tokens[i]);
-    rb_yield(rb_token);
+    VALUE rb_old_token;
+    VALUE rb_new_token;
+    rb_change_set_get(change_set, i, &rb_old_token, &rb_new_token);
+    rb_yield_values(2, rb_old_token, rb_new_token);
   }
   return self;
 }
@@ -792,6 +872,7 @@ Init_core()
   id_add = rb_intern("+");
   id_del = rb_intern("-");
   id_eq = rb_intern("=");
+  id_mod = rb_intern("!");
 
   rb_mTokdiff = rb_define_module("Tokdiff");
   rb_eTokdiffError = rb_define_class_under(rb_mTokdiff, "Error", rb_eStandardError);
