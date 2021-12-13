@@ -866,6 +866,38 @@ rb_change_set_each(VALUE self)
   return self;
 }
 
+static VALUE
+rb_change_set_old(VALUE self)
+{
+  ChangeSet *change_set;
+  TypedData_Get_Struct(self, ChangeSet, &change_set_type, change_set);
+
+  VALUE rb_ary = rb_ary_new_capa(change_set->len);
+  for(uint32_t i = 0; i < change_set->len; i++) {
+    VALUE rb_old_token;
+    VALUE rb_new_token_;
+    rb_change_set_get(change_set, i, &rb_old_token, &rb_new_token_);
+    rb_ary_push(rb_ary, rb_old_token);
+  }
+  return rb_ary;
+}
+
+static VALUE
+rb_change_set_new_m(VALUE self)
+{
+  ChangeSet *change_set;
+  TypedData_Get_Struct(self, ChangeSet, &change_set_type, change_set);
+
+  VALUE rb_ary = rb_ary_new_capa(change_set->len);
+  for(uint32_t i = 0; i < change_set->len; i++) {
+    VALUE rb_old_token_;
+    VALUE rb_new_token;
+    rb_change_set_get(change_set, i, &rb_old_token_, &rb_new_token);
+    rb_ary_push(rb_ary, rb_new_token);
+  }
+  return rb_ary;
+}
+
 void
 Init_core()
 {
@@ -885,8 +917,10 @@ Init_core()
   rb_define_method(rb_cChangeSet, "[]", rb_change_set_aref, 1);
   rb_define_method(rb_cChangeSet, "size", rb_change_set_size, 0);
   rb_define_method(rb_cChangeSet, "type", rb_change_set_type, 0);
-
+  rb_define_method(rb_cChangeSet, "old", rb_change_set_old, 0);
+  rb_define_method(rb_cChangeSet, "new", rb_change_set_new_m, 0);
   rb_define_method(rb_cChangeSet, "each", rb_change_set_each, 0);
+  rb_include_module(rb_cChangeSet, rb_mEnumerable);
 
 
   rb_define_method(rb_cToken, "byte_range", rb_token_byte_range, 0);
