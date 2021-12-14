@@ -30,6 +30,7 @@ typedef struct {
 typedef struct {
   uint32_t start_byte;
   uint32_t end_byte;
+  bool dont_start;
   uint16_t type;
 } Token;
 
@@ -224,8 +225,6 @@ tokenize(const char *input, size_t input_len, Token **tokens, size_t *tokens_len
       case '9':
         char_type = CHAR_TYPE_DIGIT;
         break;
-      case ':':
-      case ';':
       case '<':
         char_type = CHAR_TYPE_BRACKET;
         break;
@@ -237,6 +236,8 @@ tokenize(const char *input, size_t input_len, Token **tokens, size_t *tokens_len
         break;
       case '?':
       case '@':
+      case ':':
+      case ';':
         char_type = CHAR_TYPE_PUNCT;
         break;
       case 'A':
@@ -344,7 +345,9 @@ add_token:
         *tokens_capa = new_tokens_capa;
       }
 
+
       if(ignore_whitespace && (prev_char_type == CHAR_TYPE_SPACE || prev_char_type == CHAR_TYPE_LINE)) {
+      //  fprintf(stderr, "SKIPPING TOKEN: '%.*s' (%d-%d)\n", i - last_token_pos, input + last_token_pos, last_token_pos, i);
         goto next;
       }
 
@@ -353,6 +356,7 @@ add_token:
 
       token->start_byte = last_token_pos;
       token->end_byte = i;
+      token->dont_start = prev_char_type == CHAR_TYPE_PUNCT && char_type == CHAR_TYPE_LINE;
 
       // fprintf(stderr, "TOKEN: '%.*s' (%d-%d)\n", i - last_token_pos, input + last_token_pos, last_token_pos, i);
       
@@ -582,17 +586,20 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
             st_lookup(overlap, (st_data_t) (iold - 1), (st_data_t *) &prev_sub_len);
           }
 
-          uint32_t new_sub_len = prev_sub_len + 1;
-          if(new_sub_len > sub_length) {
-              sub_length = new_sub_len;
-              sub_start_old = iold - sub_length + 1;
-              sub_start_new = inew - sub_length + 1;
+          if(!(prev_sub_len == 0 && token->dont_start)) {
+            uint32_t new_sub_len = prev_sub_len + 1;
+            if(new_sub_len > sub_length) {
+                sub_length = new_sub_len;
+                sub_start_old = iold - sub_length + 1;
+                sub_start_new = inew - sub_length + 1;
+            }
+            assert(sub_length <= len_old);
+            assert(sub_length <= len_new);
+            assert(sub_start_old >= start_old);
+            assert(sub_start_new >= start_new);
+            st_insert(_overlap, (st_data_t) iold, new_sub_len);
+
           }
-          assert(sub_length <= len_old);
-          assert(sub_length <= len_new);
-          assert(sub_start_old >= start_old);
-          assert(sub_start_new >= start_new);
-          st_insert(_overlap, (st_data_t) iold, new_sub_len);
 
           if(next_index == UINT32_MAX) {
             break;
