@@ -120,14 +120,23 @@ typedef enum {
   CHANGE_TYPE_MOD,
 } change_type_t;
 
+typedef enum {
+  BRACKET_TYPE_INVALID,
+  BRACKET_TYPE_OPEN,
+  BRACKET_TYPE_CLOSED
+} bracket_type_t;
+
 static void
 tokenize(const char *input, size_t input_len, Token **tokens, size_t *tokens_len, size_t *tokens_capa, bool ignore_whitespace) {
   uint32_t last_token_pos = 0;
   uint16_t prev_char_type = CHAR_TYPE_INVALID;
+  uint16_t prev_bracket_type = BRACKET_TYPE_INVALID;
+
   bool flush = false;
   size_t i;
   for(i = 0; i <= input_len; i++) {
     uint16_t char_type = CHAR_TYPE_INVALID;
+    uint16_t bracket_type = BRACKET_TYPE_INVALID;
 
     if(i == input_len) goto add_token;
 
@@ -194,8 +203,16 @@ tokenize(const char *input, size_t input_len, Token **tokens, size_t *tokens_len
         char_type = CHAR_TYPE_QUOTE;
         break;
       case '(':
-      case ')':
+      case '[':
+      case '{':
         char_type = CHAR_TYPE_BRACKET;
+        bracket_type = BRACKET_TYPE_OPEN;
+        break;
+      case ')':
+      case ']':
+      case '}':
+        char_type = CHAR_TYPE_BRACKET;
+        bracket_type = BRACKET_TYPE_CLOSED;
         break;
       case '*':
       case '+':
@@ -268,14 +285,8 @@ tokenize(const char *input, size_t input_len, Token **tokens, size_t *tokens_len
       case 'Z':
         char_type = CHAR_TYPE_ALPHA;
         break;
-      case '[':
-        char_type = CHAR_TYPE_BRACKET;
-        break;
       case '\\':
         char_type = CHAR_TYPE_PUNCT;
-        break;
-      case ']':
-        char_type = CHAR_TYPE_BRACKET;
         break;
       case '^':
       case '_':
@@ -310,14 +321,8 @@ tokenize(const char *input, size_t input_len, Token **tokens, size_t *tokens_len
       case 'z':
         char_type = CHAR_TYPE_ALPHA;
         break;
-      case '{':
-        char_type = CHAR_TYPE_BRACKET;
-        break;
       case '|':
         char_type = CHAR_TYPE_PUNCT;
-        break;
-      case '}':
-        char_type = CHAR_TYPE_BRACKET;
         break;
       case '~':
         char_type = CHAR_TYPE_PUNCT;
@@ -356,7 +361,8 @@ add_token:
 
       token->start_byte = last_token_pos;
       token->end_byte = i;
-      token->dont_start = prev_char_type == CHAR_TYPE_PUNCT && char_type == CHAR_TYPE_LINE;
+      token->dont_start = (prev_char_type == CHAR_TYPE_PUNCT ||
+                           (prev_char_type == CHAR_TYPE_BRACKET && prev_bracket_type == BRACKET_TYPE_CLOSED)) && char_type == CHAR_TYPE_LINE;
 
       // fprintf(stderr, "TOKEN: '%.*s' (%d-%d)\n", i - last_token_pos, input + last_token_pos, last_token_pos, i);
       
@@ -368,6 +374,7 @@ next:
     }
 
     prev_char_type = char_type;
+    prev_bracket_type = bracket_type;
   }
 }
 
