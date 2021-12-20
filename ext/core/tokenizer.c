@@ -1,6 +1,21 @@
 #include "tokenizer.h"
 #include "ruby.h"
 
+typedef enum {
+  STACK_TOKEN_DBL_QUOTE,
+  STACK_TOKEN_SNGL_QUOTE,
+} StackToken;
+
+
+#define TOKEN_STACK_CAPA 1024
+
+typedef struct {
+  uint8_t stack_data[TOKEN_STACK_CAPA];
+  uint8_t *data;
+  uint16_t index;
+  uint16_t capa;
+} TokenStack;
+
 typedef struct {
   bool data[QUOTE_TYPE_MAX];
 } InsideStringAry;
@@ -14,7 +29,25 @@ typedef struct {
   bool flush;
   InsideStringAry inside_string;
   InsideStringAry prev_inside_string;
+  TokenStack stack;
 } TokenizerState;
+
+static void
+tokenizer_state_push(TokenizerState *s, StackToken t) {
+  TokenStack *st = &s->stack;
+  if(st->index >= st->capa) {
+    size_t old_capa = st->capa;
+    st->capa = st->capa + st->capa;
+    if(st->data == st->stack_data) {
+      uint8_t *heap_data = ALLOC_N(uint8_t, st->capa);
+      MEMCPY(heap_data, st->stack_data, uint8_t, old_capa);
+      st->data = heap_data;
+    } else {
+      REALLOC_N(st->data, uint8_t, st->capa);
+    }
+  }
+  st->data[st->index++] = t;
+}
 
 static void
 tokenizer_add_token(Tokenizer *tokenizer, Token token) {
@@ -26,6 +59,14 @@ tokenizer_add_token(Tokenizer *tokenizer, Token token) {
 
     tokenizer->tokens[tokenizer->tokens_len] = token;
     tokenizer->tokens_len++;
+}
+
+static void
+tokenizer_state_init(TokenizerState *s) {
+  TokenizerState empty_s = {0,};
+  *s = empty_s;
+  s->stack.capa = TOKEN_STACK_CAPA;
+  s->stack.data = s->stack.stack_data;
 }
 
 static void
@@ -115,7 +156,9 @@ tokenizer_feed(Tokenizer *tokenizer, TokenizerState *s, char c, size_t i) {
       break;
     case '"':
       s->char_type = CHAR_TYPE_QUOTE;
-      s->inside_string.data[QUOTE_TYPE_DBL] = !s->inside_string.data[QUOTE_TYPE_DBL];
+      if(!s->inside_string.data[QUOTE_TYPE_SNGL]) {
+        s->inside_string.data[QUOTE_TYPE_DBL] = !s->inside_string.data[QUOTE_TYPE_DBL];
+      }
       break;
     case '#':
     case '$':
@@ -125,7 +168,9 @@ tokenizer_feed(Tokenizer *tokenizer, TokenizerState *s, char c, size_t i) {
       break;
     case '\'':
       s->char_type = CHAR_TYPE_QUOTE;
-      s->inside_string.data[QUOTE_TYPE_SNGL] = !s->inside_string.data[QUOTE_TYPE_SNGL];
+      if(!s->inside_string.data[QUOTE_TYPE_DBL]) {
+        s->inside_string.data[QUOTE_TYPE_SNGL] = !s->inside_string.data[QUOTE_TYPE_SNGL];
+      }
       break;
     case '(':
     case '[':
@@ -274,7 +319,8 @@ tokenizer_feed(Tokenizer *tokenizer, TokenizerState *s, char c, size_t i) {
 
 void
 tokenizer_run(Tokenizer *tokenizer) {
-  TokenizerState s = {0,};
+  TokenizerState s;
+  tokenizer_state_init(&s);
 
   size_t i;
   for(i = 0; i < tokenizer->input_len; i++) {
