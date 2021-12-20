@@ -38,8 +38,6 @@ tokenizer_state_save(TokenizerState *s) {
 static void
 tokenizer_feed_(Tokenizer *tokenizer, TokenizerState *s, size_t i) {
     if(s->flush || (s->prev_char_type != s->char_type && i > 0)) {
-      // fprintf(stderr, "INSIDE STRING %d\n", inside_string);
-
       bool inside_string = s->prev_inside_string.data[QUOTE_TYPE_SNGL] || s->prev_inside_string.data[QUOTE_TYPE_DBL];
 
       bool ignore_token = !inside_string && tokenizer->ignore_whitespace &&
@@ -118,7 +116,6 @@ tokenizer_feed(Tokenizer *tokenizer, TokenizerState *s, char c, size_t i) {
     case '"':
       s->char_type = CHAR_TYPE_QUOTE;
       s->inside_string.data[QUOTE_TYPE_DBL] = !s->inside_string.data[QUOTE_TYPE_DBL];
-      fprintf(stderr, "SET INSIDE STRING: %d\n");
       break;
     case '#':
     case '$':
@@ -129,7 +126,6 @@ tokenizer_feed(Tokenizer *tokenizer, TokenizerState *s, char c, size_t i) {
     case '\'':
       s->char_type = CHAR_TYPE_QUOTE;
       s->inside_string.data[QUOTE_TYPE_SNGL] = !s->inside_string.data[QUOTE_TYPE_SNGL];
-      fprintf(stderr, "SET INSIDE STRING: %d\n");
       break;
     case '(':
     case '[':
