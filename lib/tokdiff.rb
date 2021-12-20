@@ -9,6 +9,10 @@ module Tokdiff
     __diff__ old, new, output_equal, ignore_whitespace
   end
 
+  def self.tokenize(input, ignore_whitespace: true)
+    __tokenize__ input, ignore_whitespace
+  end
+
   class Token
     def inspect
       %Q(#<#{self.class} "#{text}">)

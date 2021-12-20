@@ -490,6 +490,43 @@ rb_change_set_type(VALUE self) {
 }
 
 static VALUE
+rb_tokdiff_tokenize_s(VALUE self, VALUE rb_input, VALUE rb_ignore_whitespace) {
+  Check_Type(rb_input, T_STRING);
+
+  size_t tokens_capa = 512;
+  size_t tokens_len = 0;
+  bool ignore_whitespace = RB_TEST(rb_ignore_whitespace);
+
+  Token *tokens = RB_ALLOC_N(Token, tokens_capa);
+
+  {
+    Tokenizer tokenizer = {
+      .input = RSTRING_PTR(rb_input),
+      .input_len = RSTRING_LEN(rb_input),
+      .tokens = tokens,
+      .tokens_len = tokens_len,
+      .tokens_capa = tokens_capa,
+      .ignore_whitespace = ignore_whitespace,
+    };
+
+    tokenizer_run(&tokenizer);
+    // tokenize(RSTRING_PTR(rb_old), RSTRING_LEN(rb_old), &tokens, &tokens_len, &tokens_capa, ignore_whitespace);
+
+    tokens = tokenizer.tokens;
+    tokens_len = tokenizer.tokens_len;
+    tokens_capa = tokenizer.tokens_capa;
+  }
+
+  VALUE rb_ary = rb_ary_new_capa(tokens_len);
+
+  for(size_t i = 0; i < tokens_len; i++) {
+    rb_ary_push(rb_ary, rb_token_new(rb_input, &tokens[i]));
+  }
+
+  return rb_ary;
+}
+
+static VALUE
 rb_tokdiff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new, VALUE rb_output_eq, VALUE rb_ignore_whitespace) {
   Check_Type(rb_old, T_STRING);
   Check_Type(rb_new, T_STRING);
@@ -674,6 +711,7 @@ Init_core()
   rb_eTokdiffError = rb_define_class_under(rb_mTokdiff, "Error", rb_eStandardError);
 
   rb_define_singleton_method(rb_mTokdiff, "__diff__", rb_tokdiff_diff_s, 4);
+  rb_define_singleton_method(rb_mTokdiff, "__tokenize__", rb_tokdiff_tokenize_s, 2);
 
   rb_cChangeSet = rb_define_class_under(rb_mTokdiff, "ChangeSet", rb_cObject);
   rb_cToken = rb_define_class_under(rb_mTokdiff, "Token", rb_cObject);
