@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "tokenizer.h"
+
 VALUE rb_mTokdiff;
 VALUE rb_cChangeSet;
 VALUE rb_cToken;
@@ -26,13 +28,6 @@ typedef struct {
   uint32_t len;
   st_data_t *entries;
 } IndexValue;
-
-typedef struct {
-  uint32_t start_byte;
-  uint32_t end_byte;
-  bool dont_start;
-  uint16_t type;
-} Token;
 
 typedef struct {
   VALUE rb_input;
@@ -99,284 +94,6 @@ static const rb_data_type_t change_set_type = {
     .flags = RUBY_TYPED_FREE_IMMEDIATELY,
 };
 
-typedef enum {
-  CHAR_TYPE_INVALID,
-  CHAR_TYPE_OTHER,
-  CHAR_TYPE_ALPHA,
-  CHAR_TYPE_DIGIT,
-  CHAR_TYPE_BLANK,
-  CHAR_TYPE_SPACE,
-  CHAR_TYPE_LINE,
-  CHAR_TYPE_PUNCT,
-  CHAR_TYPE_QUOTE,
-  CHAR_TYPE_BRACKET,
-  CHAR_TYPE_ARITH,
-} char_type_t;
-
-typedef enum {
-  CHANGE_TYPE_ADD,
-  CHANGE_TYPE_DEL,
-  CHANGE_TYPE_EQL,
-  CHANGE_TYPE_MOD,
-} change_type_t;
-
-typedef enum {
-  BRACKET_TYPE_INVALID,
-  BRACKET_TYPE_OPEN,
-  BRACKET_TYPE_CLOSED
-} bracket_type_t;
-
-static void
-tokenize(const char *input, size_t input_len, Token **tokens, size_t *tokens_len, size_t *tokens_capa, bool ignore_whitespace) {
-  uint32_t last_token_pos = 0;
-  uint16_t prev_char_type = CHAR_TYPE_INVALID;
-  uint16_t prev_bracket_type = BRACKET_TYPE_INVALID;
-
-  bool flush = false;
-  size_t i;
-  for(i = 0; i <= input_len; i++) {
-    uint16_t char_type = CHAR_TYPE_INVALID;
-    uint16_t bracket_type = BRACKET_TYPE_INVALID;
-
-    if(i == input_len) goto add_token;
-
-    char c = input[i];
-
-    switch(c) {
-      case '\x00':
-      case '\x01':
-      case '\x02':
-      case '\x03':
-      case '\x04':
-      case '\x05':
-      case '\x06':
-      case '\a':
-      case '\b':
-        char_type = CHAR_TYPE_OTHER;
-        break;
-        break;
-      case '\v':
-      case '\f':
-        char_type = CHAR_TYPE_OTHER;
-        break;
-      case '\r':
-      case '\n':
-        char_type = CHAR_TYPE_LINE;
-        break;
-      case '\x0E':
-      case '\x0F':
-      case '\x10':
-      case '\x11':
-      case '\x12':
-      case '\x13':
-      case '\x14':
-      case '\x15':
-      case '\x16':
-      case '\x17':
-      case '\x18':
-      case '\x19':
-      case '\x1A':
-      case '\x1B':
-      case '\x1C':
-      case '\x1D':
-      case '\x1E':
-      case '\x1F':
-        char_type = CHAR_TYPE_OTHER;
-        break;
-      case '\t':
-      case ' ':
-        char_type = CHAR_TYPE_SPACE;
-        break;
-      case '!':
-        char_type = CHAR_TYPE_PUNCT;
-        break;
-      case '"':
-        char_type = CHAR_TYPE_QUOTE;
-        break;
-      case '#':
-      case '$':
-      case '%':
-      case '&':
-        char_type = CHAR_TYPE_PUNCT;
-        break;
-      case '\'':
-        char_type = CHAR_TYPE_QUOTE;
-        break;
-      case '(':
-      case '[':
-      case '{':
-        char_type = CHAR_TYPE_BRACKET;
-        bracket_type = BRACKET_TYPE_OPEN;
-        break;
-      case ')':
-      case ']':
-      case '}':
-        char_type = CHAR_TYPE_BRACKET;
-        bracket_type = BRACKET_TYPE_CLOSED;
-        break;
-      case '*':
-      case '+':
-        char_type = CHAR_TYPE_ARITH;
-        break;
-      case ',':
-        char_type = CHAR_TYPE_PUNCT;
-        break;
-      case '-':
-        char_type = CHAR_TYPE_ARITH;
-        break;
-      case '.':
-        char_type = CHAR_TYPE_PUNCT;
-        break;
-      case '/':
-        char_type = CHAR_TYPE_ARITH;
-        break;
-      case '0':
-      case '1':
-      case '2':
-      case '3':
-      case '4':
-      case '5':
-      case '6':
-      case '7':
-      case '8':
-      case '9':
-        char_type = CHAR_TYPE_DIGIT;
-        break;
-      case '<':
-        char_type = CHAR_TYPE_BRACKET;
-        break;
-      case '=':
-        char_type = CHAR_TYPE_ARITH;
-        break;
-      case '>':
-        char_type = CHAR_TYPE_BRACKET;
-        break;
-      case '?':
-      case '@':
-      case ':':
-      case ';':
-        char_type = CHAR_TYPE_PUNCT;
-        break;
-      case 'A':
-      case 'B':
-      case 'C':
-      case 'D':
-      case 'E':
-      case 'F':
-      case 'G':
-      case 'H':
-      case 'I':
-      case 'J':
-      case 'K':
-      case 'L':
-      case 'M':
-      case 'N':
-      case 'O':
-      case 'P':
-      case 'Q':
-      case 'R':
-      case 'S':
-      case 'T':
-      case 'U':
-      case 'V':
-      case 'W':
-      case 'X':
-      case 'Y':
-      case 'Z':
-        char_type = CHAR_TYPE_ALPHA;
-        break;
-      case '\\':
-        char_type = CHAR_TYPE_PUNCT;
-        break;
-      case '^':
-      case '_':
-      case '`':
-        char_type = CHAR_TYPE_PUNCT;
-        break;
-      case 'a':
-      case 'b':
-      case 'c':
-      case 'd':
-      case 'e':
-      case 'f':
-      case 'g':
-      case 'h':
-      case 'i':
-      case 'j':
-      case 'k':
-      case 'l':
-      case 'm':
-      case 'n':
-      case 'o':
-      case 'p':
-      case 'q':
-      case 'r':
-      case 's':
-      case 't':
-      case 'u':
-      case 'v':
-      case 'w':
-      case 'x':
-      case 'y':
-      case 'z':
-        char_type = CHAR_TYPE_ALPHA;
-        break;
-      case '|':
-        char_type = CHAR_TYPE_PUNCT;
-        break;
-      case '~':
-        char_type = CHAR_TYPE_PUNCT;
-        break;
-      case '\x7F':
-      default:
-        char_type = CHAR_TYPE_INVALID;
-        break;
-    }
-
-    switch(char_type) {
-      case CHAR_TYPE_BRACKET:
-      case CHAR_TYPE_QUOTE:
-        flush = true;
-        break;
-      default:
-        break;
-    }
-
-    if(flush || (prev_char_type != char_type && i > 0)) {
-add_token:      
-      if (*tokens_len >= *tokens_capa) {
-        size_t new_tokens_capa = (*tokens_capa) * 2;
-        RB_REALLOC_N(*tokens, Token, new_tokens_capa);
-        *tokens_capa = new_tokens_capa;
-      }
-
-
-      if(ignore_whitespace && (prev_char_type == CHAR_TYPE_SPACE || prev_char_type == CHAR_TYPE_LINE)) {
-      //  fprintf(stderr, "SKIPPING TOKEN: '%.*s' (%d-%d)\n", i - last_token_pos, input + last_token_pos, last_token_pos, i);
-        goto next;
-      }
-
-      Token *token = &(*tokens)[*tokens_len];
-      (*tokens_len)++;
-
-      token->start_byte = last_token_pos;
-      token->end_byte = i;
-      token->dont_start = (prev_char_type == CHAR_TYPE_PUNCT ||
-                           (prev_char_type == CHAR_TYPE_BRACKET && prev_bracket_type == BRACKET_TYPE_CLOSED)) && char_type == CHAR_TYPE_LINE;
-
-      // fprintf(stderr, "TOKEN: '%.*s' (%d-%d)\n", i - last_token_pos, input + last_token_pos, last_token_pos, i);
-      
-      token->type = prev_char_type;
-
-next:
-      flush = false;
-      last_token_pos = i;
-    }
-
-    prev_char_type = char_type;
-    prev_bracket_type = bracket_type;
-  }
-}
 
 
 static st_index_t
@@ -497,7 +214,7 @@ update_callback(st_data_t *key, st_data_t *value, st_data_t arg, int existing) {
 }
 
 static VALUE
-rb_change_set_new_full(change_type_t change_type, VALUE rb_old_input, VALUE rb_new_input,
+rb_change_set_new_full(ChangeType change_type, VALUE rb_old_input, VALUE rb_new_input,
                        Token *old_tokens, size_t old_start, size_t old_len,
                        Token *new_tokens, size_t new_start, size_t new_len)
 {
@@ -517,7 +234,7 @@ rb_change_set_new_full(change_type_t change_type, VALUE rb_old_input, VALUE rb_n
 }
 
 static VALUE
-rb_change_set_new(change_type_t change_type, VALUE rb_input,
+rb_change_set_new(ChangeType change_type, VALUE rb_input,
                   Token *tokens, size_t start, size_t len)
 {
   switch(change_type) {
@@ -786,11 +503,44 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new, VALUE rb_output_eq, VA
   bool ignore_whitespace = RB_TEST(rb_ignore_whitespace);
 
   Token *tokens = RB_ALLOC_N(Token, tokens_capa);
-  tokenize(RSTRING_PTR(rb_old), RSTRING_LEN(rb_old), &tokens, &tokens_len, &tokens_capa, ignore_whitespace);
+
+  {
+    Tokenizer tokenizer = {
+      .input = RSTRING_PTR(rb_old),
+      .input_len = RSTRING_LEN(rb_old),
+      .tokens = tokens,
+      .tokens_len = tokens_len,
+      .tokens_capa = tokens_capa,
+      .ignore_whitespace = ignore_whitespace,
+    };
+
+    tokenizer_run(&tokenizer);
+    // tokenize(RSTRING_PTR(rb_old), RSTRING_LEN(rb_old), &tokens, &tokens_len, &tokens_capa, ignore_whitespace);
+
+    tokens = tokenizer.tokens;
+    tokens_len = tokenizer.tokens_len;
+    tokens_capa = tokenizer.tokens_capa;
+  }
 
   tokens_old_len = tokens_len;
 
-  tokenize(RSTRING_PTR(rb_new), RSTRING_LEN(rb_new), &tokens, &tokens_len, &tokens_capa, ignore_whitespace);
+  {
+    Tokenizer tokenizer = {
+      .input = RSTRING_PTR(rb_new),
+      .input_len = RSTRING_LEN(rb_new),
+      .tokens = tokens,
+      .tokens_len = tokens_len,
+      .tokens_capa = tokens_capa,
+      .ignore_whitespace = ignore_whitespace,
+    };
+
+    tokenizer_run(&tokenizer);
+
+    tokens = tokenizer.tokens;
+    tokens_len = tokenizer.tokens_len;
+    tokens_capa = tokenizer.tokens_capa;
+  // tokenize(RSTRING_PTR(rb_new), RSTRING_LEN(rb_new), &tokens, &tokens_len, &tokens_capa, ignore_whitespace);
+  }
 
   tokens_new_len = tokens_len - tokens_old_len;
 
