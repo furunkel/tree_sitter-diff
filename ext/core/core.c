@@ -242,6 +242,39 @@ update_callback(st_data_t *key, st_data_t *value, st_data_t arg, int existing) {
   return ST_CONTINUE;
 }
 
+typedef struct {
+  uint32_t *data;
+  uint32_t min_index;
+  uint32_t max_index;
+} IntIntMap;
+
+static void
+int_int_map_init(IntIntMap *map, uint32_t capa) {
+  map->data = RB_ZALLOC_N(uint32_t, capa);
+  map->min_index = capa;
+  map->max_index = 0;
+}
+
+static void
+int_int_map_destroy(IntIntMap *map) {
+  xfree(map->data);
+}
+
+static void
+int_int_map_insert(IntIntMap *map, uint32_t index, uint32_t value) {
+  map->data[index] = value;
+  map->max_index = MAX(map->max_index, index);
+  map->min_index = MIN(map->min_index, index);
+}
+
+static void
+int_int_map_reset(IntIntMap *map) {
+  if(map->min_index <= map->max_index) {
+     memset(map->data + map->min_index, 0, (map->max_index - map->min_index + 1) * sizeof(uint32_t));
+  }
+  // memset(map->data, 0, map->max_index * sizeof(uint32_t));
+}
+
 static VALUE
 rb_change_set_new_full(ChangeType change_type, VALUE rb_old_input, VALUE rb_new_input,
                        Token *old_tokens, size_t old_start, size_t old_len,
@@ -283,8 +316,8 @@ rb_change_set_new(ChangeType change_type, VALUE rb_input,
 
 // Loosely based on https://github.com/paulgb/simplediff
 static void
-token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKey *table_entries_old, st_table *overlap,
-          st_table *_overlap, st_table *old_index_map, VALUE rb_input_old, VALUE rb_input_new,
+token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKey *table_entries_old, IntIntMap *overlap,
+          IntIntMap *_overlap, st_table *old_index_map, VALUE rb_input_old, VALUE rb_input_new,
           uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new, VALUE rb_out_ary, bool output_eq) {
 
   if(len_old == 0 && len_new == 0) return;
@@ -316,7 +349,7 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
     for(size_t inew = start_new; inew < start_new + len_new; inew++) {
       Token *token = &tokens_new[inew];
 
-      assert(_overlap->num_entries == 0);
+      // assert(_overlap->num_entries == 0);
 
       IndexKey key = {
         .start_byte = token->start_byte,
@@ -333,10 +366,11 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
 
           uint32_t iold = value;
 
-          st_data_t prev_sub_len = 0;
+          uint32_t prev_sub_len = 0;
 
           if(iold > start_old) {
-            st_lookup(overlap, (st_data_t) (iold - 1), (st_data_t *) &prev_sub_len);
+            prev_sub_len = overlap->data[iold - 1];
+            // st_lookup(overlap, (st_data_t) (iold - 1), (st_data_t *) &prev_sub_len);
           }
 
           if(!(prev_sub_len == 0 && token->dont_start)) {
@@ -350,8 +384,8 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
             assert(sub_length <= len_new);
             assert(sub_start_old >= start_old);
             assert(sub_start_new >= start_new);
-            st_insert(_overlap, (st_data_t) iold, new_sub_len);
-
+            // st_insert(_overlap, (st_data_t) iold, new_sub_len);
+            int_int_map_insert(_overlap, iold, new_sub_len);
           }
 
           if(next_index == UINT32_MAX) {
@@ -363,10 +397,12 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
       }
 
       {
-        st_table *tmp = overlap;
+        IntIntMap *tmp = overlap;
         overlap = _overlap;
         _overlap = tmp;
-        st_clear(_overlap);
+
+        int_int_map_reset(_overlap);
+        // st_clear(_overlap);
       }
     }
   }
@@ -391,8 +427,11 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
       rb_ary_push(rb_out_ary, rb_change_set_new(CHANGE_TYPE_ADD, rb_input_new, tokens_new, start_new, len_new));
     }
   } else {
-    st_clear(_overlap);
-    st_clear(overlap);
+    // st_clear(_overlap);
+    // st_clear(overlap);
+    int_int_map_reset(_overlap);
+    int_int_map_reset(overlap);
+
     st_clear(old_index_map);
     index_list->len = 0;
 
@@ -413,8 +452,10 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
                                                      tokens_new, sub_start_new, sub_length));
     }
 
-    st_clear(_overlap);
-    st_clear(overlap);
+    // st_clear(_overlap);
+    // st_clear(overlap);
+    int_int_map_reset(_overlap);
+    int_int_map_reset(overlap);
     st_clear(old_index_map);
     index_list->len = 0;
 
@@ -665,8 +706,13 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_language, VALUE rb_old, VALUE rb_new, VAL
   index_list.entries = RB_ALLOC_N(st_data_t, index_list.capa);
 
 
-  st_table *overlap = st_init_numtable();
-  st_table *_overlap = st_init_numtable();
+
+  IntIntMap overlap;
+  IntIntMap _overlap;
+
+  int_int_map_init(&overlap, tokens_old_len);
+  int_int_map_init(&_overlap, tokens_old_len);
+
   st_table *old_index_map = st_init_table(&type_index_key_hash);
 
   ssize_t i;
@@ -699,15 +745,17 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_language, VALUE rb_old, VALUE rb_new, VAL
 
   assert(suffix_len + prefix_len < MAX(tokens_old_len, tokens_new_len));
 
-  token_diff(tokens_old, tokens_new, &index_list, table_entries_old, overlap, _overlap, old_index_map,
+  token_diff(tokens_old, tokens_new, &index_list, table_entries_old, &overlap, &_overlap, old_index_map,
             rb_old, rb_new, prefix_len, tokens_old_len - suffix_len - prefix_len, prefix_len, tokens_new_len - suffix_len - prefix_len, rb_out_ary, output_eq);
 
   // token_diff(tokens_old, tokens_new, &index_list, table_entries_old, overlap, _overlap, old_index_map,
   //           rb_old, rb_new, 0, tokens_old_len, 0, tokens_new_len, rb_out_ary, output_eq);
 
 done:
-  st_free_table(overlap);
-  st_free_table(_overlap);
+  // st_free_table(overlap);
+  // st_free_table(_overlap);
+  int_int_map_destroy(&overlap);
+  int_int_map_destroy(&_overlap);
   st_free_table(old_index_map);
   xfree(table_entries_old);
   xfree(index_list.entries);

@@ -17,6 +17,7 @@ typedef enum {
   TOKEN_TYPE_BRACKET,
   TOKEN_TYPE_ARITH,
   TOKEN_TYPE_COMMENT,
+  TOKEN_TYPE_ESCAPE_STR,
 } TokenType;
 
 typedef enum {

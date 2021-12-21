@@ -33,20 +33,18 @@ typedef struct {
 typedef struct {
   uint16_t bracket_type;
   uint16_t prev_bracket_type;
-  uint8_t inside_string;
-  uint8_t inside_comment;
   TokenStack stack;
 
   // re2c stuff
-  char *padded_input;
-  char *yymarker;
-  char *yyctxmarker;
-  char *yycursor;
-  char *yylimit;
+  uint8_t *padded_input;
+  uint8_t *yymarker;
+  uint8_t *yyctxmarker;
+  uint8_t *yycursor;
+  uint8_t *yylimit;
 
 } TokenizerState;
 
-
+/*
 static void
 tokenizer_state_push(TokenizerState *s, StackToken t) {
   TokenStack *st = &s->stack;
@@ -63,6 +61,7 @@ tokenizer_state_push(TokenizerState *s, StackToken t) {
   }
   st->data[st->index++] = t;
 }
+*/
 
 static void
 tokenizer_add_token(Tokenizer *tokenizer, Token token) {
@@ -79,6 +78,9 @@ tokenizer_add_token(Tokenizer *tokenizer, Token token) {
 static void
 tokenizer_add_token_(Tokenizer *tokenizer, TokenizerState *state, Token token) {
   token.end_byte = state->yycursor - state->padded_input;
+
+  //fprintf(stderr, "TOKEN: %.*s\n", token.end_byte - token.start_byte, state->padded_input + token.start_byte);
+
   if(token.end_byte <= tokenizer->input_len) {
     tokenizer_add_token(tokenizer, token);
   }
@@ -93,7 +95,7 @@ tokenizer_state_init(TokenizerState *s, Tokenizer *tokenizer) {
   s->stack.capa = TOKEN_STACK_CAPA;
   s->stack.data = s->stack.stack_data;
 
-  s->padded_input = (char *) xmalloc(tokenizer->input_len + YYMAXFILL);
+  s->padded_input = (uint8_t *) xmalloc(tokenizer->input_len + YYMAXFILL);
   memcpy(s->padded_input, tokenizer->input, tokenizer->input_len);
   memset(s->padded_input + tokenizer->input_len, 0, YYMAXFILL);
   s->yycursor = s->padded_input;
@@ -110,7 +112,7 @@ tokenizer_state_save(TokenizerState *s) {
 }
 
 /*!re2c
-  re2c:define:YYCTYPE = "unsigned char";
+  re2c:define:YYCTYPE = "uint8_t";
   re2c:flags:utf-8 = 1;
   re2c:define:YYCURSOR = s->yycursor;
   re2c:define:YYMARKER = s->yymarker;
@@ -123,36 +125,23 @@ tokenizer_state_save(TokenizerState *s) {
   OPEN_BRACKET = "(" | "[" | "{" | "<";
   CLOSED_BRACKET = ")" | "]" | "}" | ">";
   DIGITS = [0-9]+;
+  PUNCT = [!#$%&,\.\?@:;^_|~]+;
+  ALPHA = [a-zA-Z]+;
+  ARITH = "+" | "-" | "*" | "/" | "=";
 */
 
 /*!include:re2c "unicode_categories.re" */
 
-static void
-tokenizer_state_handle_comment(TokenizerState *s, CommentType c) {
-  if(s->inside_comment == COMMENT_TYPE_INVALID) {
-    s->inside_comment = c;
-  } else {
-    if(s->inside_comment == c) {
-      s->inside_string = COMMENT_TYPE_INVALID;
-    }
+static uint8_t
+quote_type_to_char(QuoteType t) {
+  switch(t) {
+    case QUOTE_TYPE_DBL: return '"';
+    case QUOTE_TYPE_SNGL: return '\'';
+    case QUOTE_TYPE_BACKTICK: return '`';
+    case QUOTE_TYPE_INVALID:
+    default:
+      return '\0';
   }
-}
-
-static void
-tokenizer_state_handle_quote(TokenizerState *s, QuoteType q) {
-  if(s->inside_comment) return;
-  if(s->inside_string == QUOTE_TYPE_INVALID) {
-    s->inside_string = q;
-  } else {
-    if(s->inside_string == q) {
-      s->inside_string = QUOTE_TYPE_INVALID;
-    }
-  }
-}
-
-static bool
-tokenizer_state_inside_string(TokenizerState *s) {
-  return s->inside_string != QUOTE_TYPE_INVALID;
 }
 
 /*!rules:re2c:c_comments
@@ -161,9 +150,10 @@ tokenizer_state_inside_string(TokenizerState *s) {
     if(tokenizer->ignore_comments) {
       goto redo;
     } else {
-      t.type = TOKEN_TYPE_COMMENT;
-      tokenizer_state_handle_comment(s, COMMENT_TYPE_DOUBLE_SLASH);
-      goto end;
+      t.type = TOKEN_TYPE_PUNCT;
+      tokenizer_add_token_(tokenizer, s, t);
+      if(!tokenizer_tokenize_comment(tokenizer, s, COMMENT_TYPE_DOUBLE_SLASH)) return false;
+      goto redo;
     }
   }
 
@@ -171,9 +161,10 @@ tokenizer_state_inside_string(TokenizerState *s) {
     if(tokenizer->ignore_comments) {
       goto redo;
     } else {
-      t.type = TOKEN_TYPE_COMMENT;
-      tokenizer_state_handle_comment(s, COMMENT_TYPE_SLASH_STAR);
-      goto end;
+      t.type = TOKEN_TYPE_PUNCT;
+      tokenizer_add_token_(tokenizer, s, t);
+      if(!tokenizer_tokenize_comment(tokenizer, s, COMMENT_TYPE_SLASH_STAR)) return false;
+      goto redo;
     }
   }
 */
@@ -183,9 +174,10 @@ tokenizer_state_inside_string(TokenizerState *s) {
     if(tokenizer->ignore_comments) {
       goto redo;
     } else {
-      t.type = TOKEN_TYPE_COMMENT;
-      tokenizer_state_handle_comment(s, COMMENT_TYPE_SHARP);
-      goto end;
+      t.type = TOKEN_TYPE_PUNCT;
+      tokenizer_add_token_(tokenizer, s, t);
+      if(!tokenizer_tokenize_comment(tokenizer, s, COMMENT_TYPE_SHARP)) return false;
+      goto redo;
     }
   }
 */
@@ -199,18 +191,16 @@ tokenizer_state_inside_string(TokenizerState *s) {
 
 /*!rules:re2c:general
   [\n\r]+ { 
-    bool inside_string = tokenizer_state_inside_string(s);
-    if(inside_string) {
+    if(tokenizer->ignore_whitespace) {
+      goto redo;
+    } else {
       t.type = TOKEN_TYPE_LINE;
       goto end;
-    } else {
-       goto redo;
     }
   }
 
   [\t ]+ {
-    bool inside_string = tokenizer_state_inside_string(s);
-    if(!inside_string && tokenizer->ignore_whitespace) {
+    if(tokenizer->ignore_whitespace) {
        goto redo;
     } else {
       t.type = TOKEN_TYPE_SPACE;
@@ -224,13 +214,7 @@ tokenizer_state_inside_string(TokenizerState *s) {
     goto end;
   }
 
-  "#" / [^\n\r]+ EOL_WS {
-    t.type = TOKEN_TYPE_PUNCT;
-    tokenizer_state_handle_comment(s, COMMENT_TYPE_SHARP);
-    goto end;
-  }
-
-  [!#$%&,\.\?@:;^_\|~\\]+ {
+  PUNCT {
     t.type = TOKEN_TYPE_PUNCT;
     goto end;
   }
@@ -250,7 +234,7 @@ tokenizer_state_inside_string(TokenizerState *s) {
     goto end;
   }
 
-  "+" | "-" | "*" | "/" | "=" {
+  ARITH {
     t.type = TOKEN_TYPE_ARITH;
     goto end;
   }
@@ -260,27 +244,30 @@ tokenizer_state_inside_string(TokenizerState *s) {
     goto end;
   }
 
-  [a-zA-Z]+ {
+  ALPHA {
     t.type = TOKEN_TYPE_ALPHA;
     goto end;
   }
 
   ["] {
     t.type = TOKEN_TYPE_QUOTE;
-    tokenizer_state_handle_quote(s, QUOTE_TYPE_DBL);
-    goto end;
+    tokenizer_add_token_(tokenizer, s, t);
+    if(!tokenizer_tokenize_string(tokenizer, s, QUOTE_TYPE_DBL)) return false;
+    goto redo;
   }
 
   ['] {
     t.type = TOKEN_TYPE_QUOTE;
-    tokenizer_state_handle_quote(s, QUOTE_TYPE_SNGL);
-    goto end;
+    tokenizer_add_token_(tokenizer, s, t);
+    if(!tokenizer_tokenize_string(tokenizer, s, QUOTE_TYPE_SNGL)) return false;
+    goto redo;
   }
 
   [`] {
     t.type = TOKEN_TYPE_QUOTE;
-    tokenizer_state_handle_quote(s, QUOTE_TYPE_BACKTICK);
-    goto end;
+    tokenizer_add_token_(tokenizer, s, t);
+    if(!tokenizer_tokenize_string(tokenizer, s, QUOTE_TYPE_BACKTICK)) return false;
+    goto redo;
   }
 
   [\x00-\x06\a\b\v\f\x0E-\x1F\x7F]+ { 
@@ -306,12 +293,148 @@ end: \
   return true; \
 }
 
+static bool
+tokenizer_tokenize_comment(Tokenizer *tokenizer, TokenizerState *s, CommentType c) {
+  while(true) {
+redo:    
+    Token t = {0, };
+    t.start_byte = s->yycursor - s->padded_input;
+    //fprintf(stderr, "INSIDE COMMENT %c\n", *(s->yycursor));
+
+  /*!re2c
+    * {
+      t.type = TOKEN_TYPE_OTHER;
+      goto end;
+    }
+
+    [ \t]+ {
+      if(tokenizer->ignore_whitespace) {
+        goto redo;
+      } else {
+        t.type = TOKEN_TYPE_SPACE;
+        goto end;
+      }
+    }
+    
+    "*/" { 
+      if(c == COMMENT_TYPE_SLASH_STAR) {
+        goto done;
+      } else {
+        t.type = TOKEN_TYPE_PUNCT;
+        goto end;
+      }
+    }
+
+    [\n\r] {
+      if(c == COMMENT_TYPE_SHARP || c == COMMENT_TYPE_DOUBLE_SLASH) {
+        goto done;
+      } else {
+        if(tokenizer->ignore_whitespace) {
+          goto redo;
+        } else {
+          t.type = TOKEN_TYPE_LINE;
+          goto end;
+        }
+      }
+    }
+
+    DIGITS {
+      t.type = TOKEN_TYPE_DIGIT;
+      goto end;
+    }
+
+    ALPHA {
+      t.type = TOKEN_TYPE_ALPHA;
+      goto end;
+    }
+
+    PUNCT {
+      t.type = TOKEN_TYPE_PUNCT;
+      goto end;
+    }
+
+    ARITH {
+      t.type = TOKEN_TYPE_ARITH;
+      goto end;
+    }
+  */
+end:
+    tokenizer_add_token_(tokenizer, s, t);
+  }
+done:
+  //fprintf(stderr, "LEAVING COMMENT\n");
+  return true;
+}
+
+static bool
+tokenizer_tokenize_string(Tokenizer *tokenizer, TokenizerState *s, QuoteType q) {
+  uint8_t quote_char = quote_type_to_char(q);
+  while(true) {
+    Token t = {0, };
+    uint8_t *cursor = s->yycursor;
+    t.start_byte = s->yycursor - s->padded_input;
+    //fprintf(stderr, "INSIDE STR '%c'|'%c'\n", *cursor, quote_char);
+
+  /*!re2c
+
+    "\\'" | "\\`" | "\\\"" { 
+      t.type = TOKEN_TYPE_QUOTE;
+      goto end;
+    }
+
+    * {
+      if (*cursor == quote_char) {
+        goto done;
+      } else {
+        t.type = TOKEN_TYPE_OTHER;
+        goto end;
+      }
+    }
+
+    "\\a" | "\\b" | "\\f" | "\\n" | "\\r" | "\\t" | "\\v" | "\\\\" | "\\" [0-7]{1,3} | "\\u" [0-9a-fA-F]{4} | "\\U" [0-9a-fA-F]{8} | "\\x" [0-9a-fA-F]+  {
+      t.type = TOKEN_TYPE_ESCAPE_STR;
+      goto end;
+    }
+
+    DIGITS {
+      t.type = TOKEN_TYPE_DIGIT;
+      goto end;
+    }
+
+    ALPHA {
+      t.type = TOKEN_TYPE_ALPHA;
+      goto end;
+    }
+
+    PUNCT {
+      t.type = TOKEN_TYPE_PUNCT;
+      goto end;
+    }
+
+    ARITH {
+      t.type = TOKEN_TYPE_ARITH;
+      goto end;
+    }
+
+    [ \t]+ {
+      t.type = TOKEN_TYPE_SPACE;
+      goto end;
+    }
+  */
+end:
+    tokenizer_add_token_(tokenizer, s, t);
+  }
+done:
+  //fprintf(stderr, "LEAVING STR %c\n", *(s->yycursor));
+  return true;
+}
+
 
 static bool
 tokenizer_next(Tokenizer *tokenizer, TokenizerState *s) {
-  Token t = {0, };
 
 redo:
+  Token t = {0, };
   t.start_byte = s->yycursor - s->padded_input;
 
   /*!re2c
