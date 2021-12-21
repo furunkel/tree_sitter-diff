@@ -5,12 +5,12 @@ require_relative 'tokdiff/core'
 
 module Tokdiff
 
-  def self.diff(old, new, output_equal: false, ignore_whitespace: true)
-    __diff__ old, new, output_equal, ignore_whitespace
+  def self.diff(language, old, new, output_equal: false, ignore_whitespace: true, ignore_comments: false)
+    __diff__ language.to_sym, old, new, output_equal, ignore_whitespace, ignore_comments
   end
 
-  def self.tokenize(input, ignore_whitespace: true)
-    __tokenize__ input, ignore_whitespace
+  def self.tokenize(language, input, ignore_whitespace: true, ignore_comments: false)
+    __tokenize__ language.to_sym, input, ignore_whitespace, ignore_comments
   end
 
   class Token

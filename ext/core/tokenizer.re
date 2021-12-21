@@ -6,6 +6,20 @@ typedef enum {
   STACK_TOKEN_SNGL_QUOTE,
 } StackToken;
 
+typedef enum {
+  QUOTE_TYPE_INVALID,
+  QUOTE_TYPE_SNGL,
+  QUOTE_TYPE_DBL,
+  QUOTE_TYPE_BACKTICK,
+  QUOTE_TYPE_MAX
+} QuoteType;
+
+typedef enum {
+  COMMENT_TYPE_INVALID,
+  COMMENT_TYPE_DOUBLE_SLASH,
+  COMMENT_TYPE_SHARP,
+  COMMENT_TYPE_SLASH_STAR,
+} CommentType;
 
 #define TOKEN_STACK_CAPA 1024
 
@@ -17,13 +31,10 @@ typedef struct {
 } TokenStack;
 
 typedef struct {
-  bool data[QUOTE_TYPE_MAX];
-} InsideStringAry;
-
-typedef struct {
   uint16_t bracket_type;
   uint16_t prev_bracket_type;
-  InsideStringAry inside_string;
+  uint8_t inside_string;
+  uint8_t inside_comment;
   TokenStack stack;
 
   // re2c stuff
@@ -65,6 +76,14 @@ tokenizer_add_token(Tokenizer *tokenizer, Token token) {
     tokenizer->tokens_len++;
 }
 
+static void
+tokenizer_add_token_(Tokenizer *tokenizer, TokenizerState *state, Token token) {
+  token.end_byte = state->yycursor - state->padded_input;
+  if(token.end_byte <= tokenizer->input_len) {
+    tokenizer_add_token(tokenizer, token);
+  }
+}
+
 /*!max:re2c*/
 
 static void
@@ -103,15 +122,190 @@ tokenizer_state_save(TokenizerState *s) {
   EOL_WS = [ \t]* [\n\r]+;
   OPEN_BRACKET = "(" | "[" | "{" | "<";
   CLOSED_BRACKET = ")" | "]" | "}" | ">";
-
+  DIGITS = [0-9]+;
 */
 
 /*!include:re2c "unicode_categories.re" */
 
+static void
+tokenizer_state_handle_comment(TokenizerState *s, CommentType c) {
+  if(s->inside_comment == COMMENT_TYPE_INVALID) {
+    s->inside_comment = c;
+  } else {
+    if(s->inside_comment == c) {
+      s->inside_string = COMMENT_TYPE_INVALID;
+    }
+  }
+}
+
+static void
+tokenizer_state_handle_quote(TokenizerState *s, QuoteType q) {
+  if(s->inside_comment) return;
+  if(s->inside_string == QUOTE_TYPE_INVALID) {
+    s->inside_string = q;
+  } else {
+    if(s->inside_string == q) {
+      s->inside_string = QUOTE_TYPE_INVALID;
+    }
+  }
+}
+
 static bool
 tokenizer_state_inside_string(TokenizerState *s) {
-  return s->inside_string.data[QUOTE_TYPE_SNGL] || s->inside_string.data[QUOTE_TYPE_DBL];
+  return s->inside_string != QUOTE_TYPE_INVALID;
 }
+
+/*!rules:re2c:c_comments
+
+  "//" [^\n\r]* / EOL_WS {
+    if(tokenizer->ignore_comments) {
+      goto redo;
+    } else {
+      t.type = TOKEN_TYPE_COMMENT;
+      tokenizer_state_handle_comment(s, COMMENT_TYPE_DOUBLE_SLASH);
+      goto end;
+    }
+  }
+
+  "/*" ([^*] | ("*" [^/]))* "*""/" {
+    if(tokenizer->ignore_comments) {
+      goto redo;
+    } else {
+      t.type = TOKEN_TYPE_COMMENT;
+      tokenizer_state_handle_comment(s, COMMENT_TYPE_SLASH_STAR);
+      goto end;
+    }
+  }
+*/
+
+/*!rules:re2c:sharp_comments
+  "#" [^\n\r]+ / EOL_WS {
+    if(tokenizer->ignore_comments) {
+      goto redo;
+    } else {
+      t.type = TOKEN_TYPE_COMMENT;
+      tokenizer_state_handle_comment(s, COMMENT_TYPE_SHARP);
+      goto end;
+    }
+  }
+*/
+
+/*!rules:re2c:underscore_numbers
+  DIGITS ("_" DIGITS)+ {
+    t.type = TOKEN_TYPE_DIGIT;
+    goto end;
+  }
+*/
+
+/*!rules:re2c:general
+  [\n\r]+ { 
+    bool inside_string = tokenizer_state_inside_string(s);
+    if(inside_string) {
+      t.type = TOKEN_TYPE_LINE;
+      goto end;
+    } else {
+       goto redo;
+    }
+  }
+
+  [\t ]+ {
+    bool inside_string = tokenizer_state_inside_string(s);
+    if(!inside_string && tokenizer->ignore_whitespace) {
+       goto redo;
+    } else {
+      t.type = TOKEN_TYPE_SPACE;
+      goto end;
+    }
+  }
+
+  [;] / EOL_WS {
+    t.type = TOKEN_TYPE_PUNCT;
+    t.dont_start = true;
+    goto end;
+  }
+
+  "#" / [^\n\r]+ EOL_WS {
+    t.type = TOKEN_TYPE_PUNCT;
+    tokenizer_state_handle_comment(s, COMMENT_TYPE_SHARP);
+    goto end;
+  }
+
+  [!#$%&,\.\?@:;^_\|~\\]+ {
+    t.type = TOKEN_TYPE_PUNCT;
+    goto end;
+  }
+
+  OPEN_BRACKET {
+    t.type = TOKEN_TYPE_BRACKET;
+    goto end;
+  }
+
+  CLOSED_BRACKET / EOL_WS {
+    t.type = TOKEN_TYPE_BRACKET;
+    t.dont_start = true;
+    goto end;
+  }
+  CLOSED_BRACKET {
+    t.type = TOKEN_TYPE_BRACKET;
+    goto end;
+  }
+
+  "+" | "-" | "*" | "/" | "=" {
+    t.type = TOKEN_TYPE_ARITH;
+    goto end;
+  }
+
+  DIGITS {
+    t.type = TOKEN_TYPE_DIGIT;
+    goto end;
+  }
+
+  [a-zA-Z]+ {
+    t.type = TOKEN_TYPE_ALPHA;
+    goto end;
+  }
+
+  ["] {
+    t.type = TOKEN_TYPE_QUOTE;
+    tokenizer_state_handle_quote(s, QUOTE_TYPE_DBL);
+    goto end;
+  }
+
+  ['] {
+    t.type = TOKEN_TYPE_QUOTE;
+    tokenizer_state_handle_quote(s, QUOTE_TYPE_SNGL);
+    goto end;
+  }
+
+  [`] {
+    t.type = TOKEN_TYPE_QUOTE;
+    tokenizer_state_handle_quote(s, QUOTE_TYPE_BACKTICK);
+    goto end;
+  }
+
+  [\x00-\x06\a\b\v\f\x0E-\x1F\x7F]+ { 
+    t.type = TOKEN_TYPE_OTHER;
+    goto end;
+  }
+
+  * { 
+    t.type = TOKEN_TYPE_OTHER;
+    goto redo;
+  }
+*/
+
+#define TOKENIZER_NEXT_FUNC_START(n) \
+static bool tokenizer_next_ ## n (Tokenizer *tokenizer, TokenizerState *s) { \
+  Token t = {0, }; \
+redo: \
+  t.start_byte = s->yycursor - s->padded_input;
+
+#define TOKENIZER_NEXT_FUNC_END \
+end: \
+  tokenizer_add_token_(tokenizer, s, t); \
+  return true; \
+}
+
 
 static bool
 tokenizer_next(Tokenizer *tokenizer, TokenizerState *s) {
@@ -121,110 +315,122 @@ redo:
   t.start_byte = s->yycursor - s->padded_input;
 
   /*!re2c
-  [\n\r]+ { 
-    bool inside_string = tokenizer_state_inside_string(s);
-    if(!inside_string) {
-       goto redo;
-    } else {
-      t.type = CHAR_TYPE_LINE;
-      goto end;
-    }
-  }
-
-  [\t ]+ {
-    bool inside_string = tokenizer_state_inside_string(s);
-    if(!inside_string) {
-       goto redo;
-    } else {
-      t.type = CHAR_TYPE_SPACE;
-      goto end;
-    }
-  }
-
-  [;] / EOL_WS+ {
-    t.type = CHAR_TYPE_PUNCT;
-    t.dont_start = true;
-    goto end;
-  }
-
-  [!#$%&,\.\?@:;^`_\|~\\]+ {
-    t.type = CHAR_TYPE_PUNCT;
-    goto end;
-  }
-
-  OPEN_BRACKET {
-    t.type = CHAR_TYPE_BRACKET;
-    goto end;
-  }
-
-  CLOSED_BRACKET / EOL_WS {
-    t.type = CHAR_TYPE_BRACKET;
-    t.dont_start = true;
-    goto end;
-  }
-  CLOSED_BRACKET {
-    t.type = CHAR_TYPE_BRACKET;
-    goto end;
-  }
-
-  "+" | "-" | "*" | "/" | "=" {
-    t.type = CHAR_TYPE_ARITH;
-    goto end;
-  }
-
-  [0-9]+ {
-    t.type = CHAR_TYPE_DIGIT;
-    goto end;
-  }
-
-  [a-zA-Z]+ {
-    t.type = CHAR_TYPE_ALPHA;
-    goto end;
-  }
-
-  ["] {
-    t.type = CHAR_TYPE_QUOTE;
-    if(!s->inside_string.data[QUOTE_TYPE_SNGL]) {
-      s->inside_string.data[QUOTE_TYPE_DBL] = !s->inside_string.data[QUOTE_TYPE_DBL];
-    }
-    goto end;
-  }
-
-  ['] {
-    t.type = CHAR_TYPE_QUOTE;
-    if(!s->inside_string.data[QUOTE_TYPE_DBL]) {
-      s->inside_string.data[QUOTE_TYPE_SNGL] = !s->inside_string.data[QUOTE_TYPE_SNGL];
-    }
-    goto end;
-  }
-
-  [\x00-\x06\a\b\v\f\x0E-\x1F\x7F]+ { 
-    t.type = CHAR_TYPE_OTHER;
-    goto end;
-  }
-
-  * { 
-    t.type = CHAR_TYPE_OTHER;
-    goto redo;
-  }
-
-*/
+  !use:general;
+  */
 
 end:
 
-  t.end_byte = s->yycursor - s->padded_input;
-  if(t.end_byte <= tokenizer->input_len) {
-    tokenizer_add_token(tokenizer, t);
-  }
+  tokenizer_add_token_(tokenizer, s, t);
   return true;
 }
+
+TOKENIZER_NEXT_FUNC_START(c)
+  /*!re2c
+  !use:c_comments;
+  !use:general;
+  */
+TOKENIZER_NEXT_FUNC_END
+
+TOKENIZER_NEXT_FUNC_START(cpp)
+  /*!re2c
+
+  DIGITS (['] DIGITS)+ {
+    t.type = TOKEN_TYPE_DIGIT;
+    goto end;
+  }
+
+  !use:c_comments;
+  !use:general;
+  */
+TOKENIZER_NEXT_FUNC_END
+
+TOKENIZER_NEXT_FUNC_START(java)
+  /*!re2c
+  !use:c_comments;
+  !use:general;
+  */
+TOKENIZER_NEXT_FUNC_END
+
+TOKENIZER_NEXT_FUNC_START(javascript)
+  /*!re2c
+  !use:c_comments;
+  !use:general;
+  */
+TOKENIZER_NEXT_FUNC_END
+
+TOKENIZER_NEXT_FUNC_START(python)
+  /*!re2c
+  !use:underscore_numbers;
+  !use:sharp_comments;
+  !use:general;
+  */
+TOKENIZER_NEXT_FUNC_END
+
+TOKENIZER_NEXT_FUNC_START(ruby)
+  /*!re2c
+  !use:underscore_numbers;
+  !use:sharp_comments;
+  !use:general;
+  */
+TOKENIZER_NEXT_FUNC_END
+
+TOKENIZER_NEXT_FUNC_START(php)
+  /*!re2c
+  !use:c_comments;
+  !use:general;
+  */
+TOKENIZER_NEXT_FUNC_END
+
+TOKENIZER_NEXT_FUNC_START(go)
+  /*!re2c
+  !use:c_comments;
+  !use:general;
+  */
+TOKENIZER_NEXT_FUNC_END
+
+
+typedef bool (*TokenizerNextFunc)(Tokenizer *, TokenizerState *);
 
 void
 tokenizer_run(Tokenizer *tokenizer) {
   TokenizerState s;
   tokenizer_state_init(&s, tokenizer);
 
-  while(tokenizer_next(tokenizer, &s)) {}
+  TokenizerNextFunc f;
+
+  switch(tokenizer->language) {
+    case TOKENIZER_LANGUAGE_C:
+      f = tokenizer_next_c;
+      break;
+    case TOKENIZER_LANGUAGE_CPP:
+      f = tokenizer_next_cpp;
+      break;
+    case TOKENIZER_LANGUAGE_JAVA:
+      f = tokenizer_next_java;
+      break;
+    case TOKENIZER_LANGUAGE_JAVASCRIPT:
+      f = tokenizer_next_javascript;
+      break;
+    case TOKENIZER_LANGUAGE_PYTHON:
+      f = tokenizer_next_python;
+      break;
+    case TOKENIZER_LANGUAGE_RUBY:
+      f = tokenizer_next_ruby;
+      break;
+    case TOKENIZER_LANGUAGE_PHP:
+      f = tokenizer_next_php;
+      break;
+    case TOKENIZER_LANGUAGE_GO:
+      f = tokenizer_next_go;
+      break;
+    case TOKENIZER_LANGUAGE_INVALID:
+    default:
+      abort();
+      break;
+  }
+  
+
+  while(f(tokenizer, &s)) {}
 
   // size_t i;
   // for(i = 0; i < tokenizer->input_len; i++) {

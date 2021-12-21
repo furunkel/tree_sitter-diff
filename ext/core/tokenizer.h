@@ -5,18 +5,19 @@
 #include <stdio.h>
 
 typedef enum {
-  CHAR_TYPE_INVALID,
-  CHAR_TYPE_OTHER,
-  CHAR_TYPE_ALPHA,
-  CHAR_TYPE_DIGIT,
-  CHAR_TYPE_BLANK,
-  CHAR_TYPE_SPACE,
-  CHAR_TYPE_LINE,
-  CHAR_TYPE_PUNCT,
-  CHAR_TYPE_QUOTE,
-  CHAR_TYPE_BRACKET,
-  CHAR_TYPE_ARITH,
-} CharType;
+  TOKEN_TYPE_INVALID,
+  TOKEN_TYPE_OTHER,
+  TOKEN_TYPE_ALPHA,
+  TOKEN_TYPE_DIGIT,
+  TOKEN_TYPE_BLANK,
+  TOKEN_TYPE_SPACE,
+  TOKEN_TYPE_LINE,
+  TOKEN_TYPE_PUNCT,
+  TOKEN_TYPE_QUOTE,
+  TOKEN_TYPE_BRACKET,
+  TOKEN_TYPE_ARITH,
+  TOKEN_TYPE_COMMENT,
+} TokenType;
 
 typedef enum {
   CHANGE_TYPE_ADD,
@@ -32,10 +33,17 @@ typedef enum {
 } BracketType;
 
 typedef enum {
-  QUOTE_TYPE_SNGL,
-  QUOTE_TYPE_DBL,
-  QUOTE_TYPE_MAX
-} QuoteType;
+  TOKENIZER_LANGUAGE_INVALID,
+  TOKENIZER_LANGUAGE_C,
+  TOKENIZER_LANGUAGE_CPP,
+  TOKENIZER_LANGUAGE_JAVASCRIPT,
+  TOKENIZER_LANGUAGE_JAVA,
+  TOKENIZER_LANGUAGE_RUBY,
+  TOKENIZER_LANGUAGE_PYTHON,
+  TOKENIZER_LANGUAGE_PHP,
+  TOKENIZER_LANGUAGE_GO,
+} TokenizerLanguage;
+
 
 typedef struct {
   uint32_t start_byte;
@@ -51,6 +59,8 @@ typedef struct {
   size_t tokens_len;
   size_t tokens_capa;
   bool ignore_whitespace;
+  bool ignore_comments;
+  uint8_t language;
 } Tokenizer;
 
 void tokenizer_run(Tokenizer *tokenizer);

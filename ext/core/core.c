@@ -14,6 +14,15 @@ static ID id_eq;
 static ID id_add;
 static ID id_del;
 static ID id_mod;
+static ID id_c;
+static ID id_cpp;
+static ID id_java;
+static ID id_javascript;
+static ID id_python;
+static ID id_ruby;
+static ID id_php;
+static ID id_go;
+
 
 #ifndef MAX
 #define MAX(a,b) (((a)<(b))?(b):(a))
@@ -107,6 +116,26 @@ index_key_hash(st_data_t arg) {
 
   //return st_hash(str, len, FNV1_32A_INIT);
   return rb_memhash(str, len); // ^ len;
+}
+
+static bool
+token_eql(Token *x, const char *input_x, Token *y, const char *input_y) {
+  uint32_t start_byte_x = x->start_byte;
+  uint32_t end_byte_x = x->end_byte;
+
+  uint32_t start_byte_y = y->start_byte;
+  uint32_t end_byte_y = y->end_byte;
+
+  uint32_t len_x = end_byte_x - start_byte_x;
+  uint32_t len_y = end_byte_y - start_byte_y;
+
+  if(len_x != len_y) {
+    return false;
+  } else {
+    const char *str_x = input_x + start_byte_x;
+    const char *str_y = input_y + start_byte_y;
+    return !memcmp(str_x, str_y, len_x);
+  }
 }
 
 static int
@@ -489,13 +518,33 @@ rb_change_set_type(VALUE self) {
   return ID2SYM(type_id);
 }
 
+static TokenizerLanguage
+sym2language(VALUE rb_language) {
+  ID id = SYM2ID(rb_language);
+ 
+  if(id == id_c) return TOKENIZER_LANGUAGE_C;
+  if(id == id_cpp) return TOKENIZER_LANGUAGE_CPP;
+  if(id == id_java) return TOKENIZER_LANGUAGE_JAVA;
+  if(id == id_javascript) return TOKENIZER_LANGUAGE_JAVASCRIPT;
+  if(id == id_python) return TOKENIZER_LANGUAGE_PYTHON;
+  if(id == id_ruby) return TOKENIZER_LANGUAGE_RUBY;
+  if(id == id_php) return TOKENIZER_LANGUAGE_PHP;
+  if(id == id_go) return TOKENIZER_LANGUAGE_GO;
+  if(id == id_c) return TOKENIZER_LANGUAGE_C;
+
+  rb_raise(rb_eArgError, "invalid language '%" PRIsVALUE "'", rb_language);
+  return TOKENIZER_LANGUAGE_INVALID;
+}
+
 static VALUE
-rb_tokdiff_tokenize_s(VALUE self, VALUE rb_input, VALUE rb_ignore_whitespace) {
+rb_tokdiff_tokenize_s(VALUE self, VALUE rb_language, VALUE rb_input, VALUE rb_ignore_whitespace, VALUE rb_ignore_comments) {
   Check_Type(rb_input, T_STRING);
+  TokenizerLanguage language = sym2language(rb_language);
 
   size_t tokens_capa = 512;
   size_t tokens_len = 0;
   bool ignore_whitespace = RB_TEST(rb_ignore_whitespace);
+  bool ignore_comments = RB_TEST(rb_ignore_comments);
 
   Token *tokens = RB_ALLOC_N(Token, tokens_capa);
 
@@ -507,6 +556,8 @@ rb_tokdiff_tokenize_s(VALUE self, VALUE rb_input, VALUE rb_ignore_whitespace) {
       .tokens_len = tokens_len,
       .tokens_capa = tokens_capa,
       .ignore_whitespace = ignore_whitespace,
+      .ignore_comments = ignore_comments,
+      .language = language
     };
 
     tokenizer_run(&tokenizer);
@@ -523,32 +574,52 @@ rb_tokdiff_tokenize_s(VALUE self, VALUE rb_input, VALUE rb_ignore_whitespace) {
     rb_ary_push(rb_ary, rb_token_new(rb_input, &tokens[i]));
   }
 
+  xfree(tokens);
+
   return rb_ary;
 }
 
+#undef NDEBUG
+#include <assert.h>
+
 static VALUE
-rb_tokdiff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new, VALUE rb_output_eq, VALUE rb_ignore_whitespace) {
+rb_tokdiff_diff_s(VALUE self, VALUE rb_language, VALUE rb_old, VALUE rb_new, VALUE rb_output_eq, VALUE rb_ignore_whitespace, VALUE rb_ignore_comments) {
   Check_Type(rb_old, T_STRING);
   Check_Type(rb_new, T_STRING);
+  TokenizerLanguage language = sym2language(rb_language);
 
   size_t tokens_capa = 512;
   size_t tokens_len = 0;
-  size_t tokens_old_len = 0;
-  size_t tokens_new_len = 0;
+  ssize_t tokens_old_len = 0;
+  ssize_t tokens_new_len = 0;
 
   bool output_eq = RB_TEST(rb_output_eq);
   bool ignore_whitespace = RB_TEST(rb_ignore_whitespace);
+  bool ignore_comments = RB_TEST(rb_ignore_comments);
+
+  const char *input_old = RSTRING_PTR(rb_old);
+  const char *input_new = RSTRING_PTR(rb_new);
+  size_t input_old_len = RSTRING_LEN(rb_old);
+  size_t input_new_len = RSTRING_LEN(rb_new);
+
+  VALUE rb_out_ary = rb_ary_new();
+
+  if(input_old_len == input_new_len && !memcmp(input_old, input_new, input_new_len)) {
+    return rb_out_ary;
+  }
 
   Token *tokens = RB_ALLOC_N(Token, tokens_capa);
 
   {
     Tokenizer tokenizer = {
-      .input = RSTRING_PTR(rb_old),
-      .input_len = RSTRING_LEN(rb_old),
+      .input = input_old,
+      .input_len = input_old_len,
       .tokens = tokens,
       .tokens_len = tokens_len,
       .tokens_capa = tokens_capa,
       .ignore_whitespace = ignore_whitespace,
+      .ignore_comments = ignore_comments,
+      .language = language
     };
 
     tokenizer_run(&tokenizer);
@@ -563,12 +634,14 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new, VALUE rb_output_eq, VA
 
   {
     Tokenizer tokenizer = {
-      .input = RSTRING_PTR(rb_new),
-      .input_len = RSTRING_LEN(rb_new),
+      .input = input_new,
+      .input_len = input_new_len,
       .tokens = tokens,
       .tokens_len = tokens_len,
       .tokens_capa = tokens_capa,
       .ignore_whitespace = ignore_whitespace,
+      .ignore_comments = ignore_comments,
+      .language = language
     };
 
     tokenizer_run(&tokenizer);
@@ -591,15 +664,48 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new, VALUE rb_output_eq, VA
   index_list.len = 0;
   index_list.entries = RB_ALLOC_N(st_data_t, index_list.capa);
 
-  VALUE rb_out_ary = rb_ary_new();
 
   st_table *overlap = st_init_numtable();
   st_table *_overlap = st_init_numtable();
   st_table *old_index_map = st_init_table(&type_index_key_hash);
 
-  token_diff(tokens_old, tokens_new, &index_list, table_entries_old, overlap, _overlap, old_index_map,
-            rb_old, rb_new, 0, tokens_old_len, 0, tokens_new_len, rb_out_ary, output_eq);
+  ssize_t i;
+  for(i = 0; i < MIN(tokens_old_len, tokens_new_len); i++) {
+    assert(tokens_old[i].end_byte <= input_old_len);
+    assert(tokens_new[i].end_byte <= input_new_len);
+    if(!token_eql(&tokens_old[i], input_old, &tokens_new[i], input_new)) break;
+  }
+  ssize_t prefix_len = i;
 
+  if(prefix_len == tokens_old_len && prefix_len == tokens_new_len) {
+    goto done;
+  }
+
+  for(i = 0; tokens_old_len - i > prefix_len && tokens_new_len - i > prefix_len; i++) {
+    // assert(tokens_old[i - 1].end_byte <= input_old_len);
+    // assert(tokens_new[i - 1].end_byte <= input_new_len);
+    if(!token_eql(&tokens_old[tokens_old_len - i - 1], input_old, &tokens_new[tokens_new_len - i - 1], input_new)) break;
+  }
+  ssize_t suffix_len = i;
+
+  assert(suffix_len + prefix_len <= tokens_old_len);
+  assert(suffix_len + prefix_len <= tokens_new_len);
+
+  if(suffix_len + prefix_len >= MAX(tokens_old_len, tokens_new_len)) {
+    rb_p(rb_new);
+    rb_p(rb_old);
+    fprintf(stderr, "%d\n", rb_eql(rb_new, rb_old));
+  }
+
+  assert(suffix_len + prefix_len < MAX(tokens_old_len, tokens_new_len));
+
+  token_diff(tokens_old, tokens_new, &index_list, table_entries_old, overlap, _overlap, old_index_map,
+            rb_old, rb_new, prefix_len, tokens_old_len - suffix_len - prefix_len, prefix_len, tokens_new_len - suffix_len - prefix_len, rb_out_ary, output_eq);
+
+  // token_diff(tokens_old, tokens_new, &index_list, table_entries_old, overlap, _overlap, old_index_map,
+  //           rb_old, rb_new, 0, tokens_old_len, 0, tokens_new_len, rb_out_ary, output_eq);
+
+done:
   st_free_table(overlap);
   st_free_table(_overlap);
   st_free_table(old_index_map);
@@ -619,6 +725,36 @@ rb_token_byte_range(VALUE self) {
   uint32_t end_byte = token->token.end_byte;
   return rb_range_new(INT2FIX(start_byte), INT2FIX(end_byte - 1), false);
 }
+
+// static VALUE
+// rb_token_eql(VALUE self, VALUE rb_other) {
+//   RbToken *token;
+//   TypedData_Get_Struct(self, RbToken, &token_type, token);
+
+//   if(!RB_TYPE_P(rb_other, RUBY_T_DATA)) {
+//     return Qfalse;
+//   }
+
+//   if(!rb_typeddata_is_kind_of(rb_other, &token_type)) {
+//     return Qfalse;
+//   }
+
+//   RbToken *other;
+//   TypedData_Get_Struct(rb_other, RbToken, &token_type, other);
+
+//   const char *other_input = RSTRING_PTR(rb_input);
+
+//   size_t input_len = RSTRING_LEN(rb_input);
+
+//   size_t other_input_len = RSTRING_LEN(rb_input);
+
+//   return ;
+
+//   const char *input = RSTRING_PTR(rb_input);
+//   size_t input_len = RSTRING_LEN(rb_input);
+
+//   return !memcmp()
+// }
 
 static VALUE
 rb_token_text(VALUE self) {
@@ -707,11 +843,21 @@ Init_core()
   id_eq = rb_intern("=");
   id_mod = rb_intern("!");
 
+  id_c = rb_intern("c");
+  id_cpp = rb_intern("cpp");
+  id_java = rb_intern("java");
+  id_javascript = rb_intern("javascript");
+  id_python = rb_intern("python");
+  id_ruby = rb_intern("ruby");
+  id_php = rb_intern("php");
+  id_go = rb_intern("go");
+
+
   rb_mTokdiff = rb_define_module("Tokdiff");
   rb_eTokdiffError = rb_define_class_under(rb_mTokdiff, "Error", rb_eStandardError);
 
-  rb_define_singleton_method(rb_mTokdiff, "__diff__", rb_tokdiff_diff_s, 4);
-  rb_define_singleton_method(rb_mTokdiff, "__tokenize__", rb_tokdiff_tokenize_s, 2);
+  rb_define_singleton_method(rb_mTokdiff, "__diff__", rb_tokdiff_diff_s, 6);
+  rb_define_singleton_method(rb_mTokdiff, "__tokenize__", rb_tokdiff_tokenize_s, 4);
 
   rb_cChangeSet = rb_define_class_under(rb_mTokdiff, "ChangeSet", rb_cObject);
   rb_cToken = rb_define_class_under(rb_mTokdiff, "Token", rb_cObject);
@@ -727,6 +873,8 @@ Init_core()
 
   rb_define_method(rb_cToken, "byte_range", rb_token_byte_range, 0);
   rb_define_method(rb_cToken, "text", rb_token_text, 0);
+  // rb_define_method(rb_cToken, "==", rb_token_eql, 1);
+  // rb_define_method(rb_cToken, "eql?", rb_token_eql, 1);
 
 
 }
