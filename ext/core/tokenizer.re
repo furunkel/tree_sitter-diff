@@ -208,6 +208,11 @@ quote_type_to_char(QuoteType t) {
     }
   }
 
+  "<" | ">" | ">=" | "<=" | "==" | "!=" { 
+    t.type = TOKEN_TYPE_CMP_OPERATOR;
+    goto end;
+  }
+
   [;] / EOL_WS {
     t.type = TOKEN_TYPE_PUNCT;
     t.dont_start = true;

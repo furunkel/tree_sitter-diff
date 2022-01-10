@@ -828,6 +828,32 @@ rb_token_text(VALUE self) {
 }
 
 static VALUE
+rb_token_text_p(VALUE self, VALUE rb_text) {
+  RbToken *token;
+  TypedData_Get_Struct(self, RbToken, &token_type, token);
+
+  Check_Type(rb_text, T_STRING);
+
+  uint32_t start_byte = token->token.start_byte;
+  uint32_t end_byte = token->token.end_byte;
+  size_t text_len = RSTRING_LEN(rb_text);
+
+  if(text_len != end_byte - start_byte) return Qfalse;
+  if(start_byte == end_byte) return text_len == 0 ? Qtrue : Qfalse;
+
+  VALUE rb_input = token->rb_input;
+  const char *input = RSTRING_PTR(rb_input);
+  size_t input_len = RSTRING_LEN(rb_input);
+
+  if(start_byte >= input_len || end_byte > input_len) {
+    rb_raise(rb_eTokdiffError, "text range exceeds input length (%d-%d > %zu)", start_byte, end_byte, input_len);
+    return Qnil;
+  }
+
+  return rb_memcmp(input + start_byte, RSTRING_PTR(rb_text), end_byte - start_byte) == 0 ? Qtrue : Qfalse;
+}
+
+static VALUE
 change_set_enum_length(VALUE rb_change_set, VALUE args, VALUE eobj)
 {
   ChangeSet *change_set;
@@ -921,6 +947,7 @@ Init_core()
 
   rb_define_method(rb_cToken, "byte_range", rb_token_byte_range, 0);
   rb_define_method(rb_cToken, "text", rb_token_text, 0);
+  rb_define_method(rb_cToken, "text?", rb_token_text_p, 1);
   // rb_define_method(rb_cToken, "==", rb_token_eql, 1);
   // rb_define_method(rb_cToken, "eql?", rb_token_eql, 1);
 
