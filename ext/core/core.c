@@ -824,7 +824,7 @@ rb_token_text(VALUE self) {
     rb_raise(rb_eTokdiffError, "text range exceeds input length (%d-%d > %zu)", start_byte, end_byte, input_len);
     return Qnil;
   }
-  return rb_str_new(input + start_byte, end_byte - start_byte);
+  return rb_utf8_str_new(input + start_byte, end_byte - start_byte);
 }
 
 static VALUE
