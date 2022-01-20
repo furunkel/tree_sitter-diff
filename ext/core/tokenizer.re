@@ -150,10 +150,11 @@ quote_type_to_char(QuoteType t) {
     if(tokenizer->ignore_comments) {
       goto redo;
     } else {
-      t.type = TOKEN_TYPE_PUNCT;
-      tokenizer_add_token_(tokenizer, s, t);
-      if(!tokenizer_tokenize_comment(tokenizer, s, COMMENT_TYPE_DOUBLE_SLASH)) return false;
-      goto redo;
+      t.type = TOKEN_TYPE_COMMENT;
+      goto end;
+      //tokenizer_add_token_(tokenizer, s, t);
+      //if(!tokenizer_swallow_comment(tokenizer, s, COMMENT_TYPE_DOUBLE_SLASH)) return false;
+      //goto redo;
     }
   }
 
@@ -161,10 +162,11 @@ quote_type_to_char(QuoteType t) {
     if(tokenizer->ignore_comments) {
       goto redo;
     } else {
-      t.type = TOKEN_TYPE_PUNCT;
-      tokenizer_add_token_(tokenizer, s, t);
-      if(!tokenizer_tokenize_comment(tokenizer, s, COMMENT_TYPE_SLASH_STAR)) return false;
-      goto redo;
+      t.type = TOKEN_TYPE_COMMENT;
+      goto end;
+      //tokenizer_add_token_(tokenizer, s, t);
+      //if(!tokenizer_swallow_comment(tokenizer, s, COMMENT_TYPE_SLASH_STAR)) return false;
+      //goto redo;
     }
   }
 */
@@ -174,10 +176,11 @@ quote_type_to_char(QuoteType t) {
     if(tokenizer->ignore_comments) {
       goto redo;
     } else {
-      t.type = TOKEN_TYPE_PUNCT;
-      tokenizer_add_token_(tokenizer, s, t);
-      if(!tokenizer_tokenize_comment(tokenizer, s, COMMENT_TYPE_SHARP)) return false;
-      goto redo;
+      t.type = TOKEN_TYPE_COMMENT;
+      goto end;
+      //tokenizer_add_token_(tokenizer, s, t);
+      //if(!tokenizer_swallow_comment(tokenizer, s, COMMENT_TYPE_SHARP)) return false;
+      //goto redo;
     }
   }
 */
@@ -185,6 +188,13 @@ quote_type_to_char(QuoteType t) {
 /*!rules:re2c:underscore_numbers
   DIGITS ("_" DIGITS)+ {
     t.type = TOKEN_TYPE_DIGIT;
+    goto end;
+  }
+*/
+
+/*!rules:re2c:c_identifier
+  [a-zA-Z_][a-zA-Z_0-9]* {
+    t.type = TOKEN_TYPE_ID;
     goto end;
   }
 */
@@ -257,21 +267,21 @@ quote_type_to_char(QuoteType t) {
   ["] {
     t.type = TOKEN_TYPE_QUOTE;
     tokenizer_add_token_(tokenizer, s, t);
-    if(!tokenizer_tokenize_string(tokenizer, s, QUOTE_TYPE_DBL)) return false;
+    if(!tokenizer_swallow_string(tokenizer, s, QUOTE_TYPE_DBL)) return false;
     goto redo;
   }
 
   ['] {
     t.type = TOKEN_TYPE_QUOTE;
     tokenizer_add_token_(tokenizer, s, t);
-    if(!tokenizer_tokenize_string(tokenizer, s, QUOTE_TYPE_SNGL)) return false;
+    if(!tokenizer_swallow_string(tokenizer, s, QUOTE_TYPE_SNGL)) return false;
     goto redo;
   }
 
   [`] {
     t.type = TOKEN_TYPE_QUOTE;
     tokenizer_add_token_(tokenizer, s, t);
-    if(!tokenizer_tokenize_string(tokenizer, s, QUOTE_TYPE_BACKTICK)) return false;
+    if(!tokenizer_swallow_string(tokenizer, s, QUOTE_TYPE_BACKTICK)) return false;
     goto redo;
   }
 
@@ -296,6 +306,56 @@ redo: \
 end: \
   tokenizer_add_token_(tokenizer, s, t); \
   return true; \
+}
+
+
+static bool
+tokenizer_swallow_comment(Tokenizer *tokenizer, TokenizerState *s, CommentType c) {
+  size_t start_byte = s->yycursor - s->padded_input;
+  size_t end_token_start_byte = 0;
+  while(true) {
+    //FIXME: better way do get the start/length of a match?
+    end_token_start_byte = s->yycursor - s->padded_input;
+
+  /*!re2c
+    "*/" { 
+      if(c == COMMENT_TYPE_SLASH_STAR) {
+        goto done;
+      } else {
+        goto end;
+      }
+    }
+
+    [\n\r] {
+      if(c == COMMENT_TYPE_SHARP || c == COMMENT_TYPE_DOUBLE_SLASH) {
+        goto done;
+      } else {
+        goto end;
+      }
+    }
+  */
+end:  
+  }
+done:
+  {
+    Token t = {0, };
+    t.start_byte = start_byte;
+    t.end_byte = end_token_start_byte;
+    //t.type = TOKEN_TYPE_COMMENT_CONTENT;
+    tokenizer_add_token(tokenizer, t);
+  }
+
+  {
+    Token t = {0, };
+    t.start_byte = end_token_start_byte;
+    t.end_byte = s->yycursor - s->padded_input;
+    //t.type = TOKEN_TYPE_COMMENT_END;
+    tokenizer_add_token(tokenizer, t);
+  }
+
+
+  //fprintf(stderr, "LEAVING COMMENT\n");
+  return true;
 }
 
 static bool
@@ -371,6 +431,51 @@ done:
   return true;
 }
 
+
+static bool
+tokenizer_swallow_string(Tokenizer *tokenizer, TokenizerState *s, QuoteType q) {
+  uint8_t quote_char = quote_type_to_char(q);
+  size_t start_byte = s->yycursor - s->padded_input;
+  size_t last_match_start_byte = 0;
+  while(true) {
+    uint8_t *cursor = s->yycursor;
+    last_match_start_byte = s->yycursor - s->padded_input;
+    //fprintf(stderr, "INSIDE STR '%c'|'%c'\n", *cursor, quote_char);
+
+  /*!re2c
+
+    ['"`] {
+      if (*cursor == quote_char) {
+        // empty string
+        {
+          Token t = {0, };
+          t.type = TOKEN_TYPE_STR_CONTENT;
+          t.start_byte = start_byte;
+          t.end_byte = last_match_start_byte;
+          tokenizer_add_token(tokenizer, t);
+        }
+
+        {
+          Token t = {0, };
+          t.type = TOKEN_TYPE_QUOTE;
+          t.start_byte = last_match_start_byte;
+          tokenizer_add_token_(tokenizer, s, t);
+        }
+        goto done;
+      } else {
+        goto end;
+      }
+    }
+  */
+
+end:
+  }
+done:
+  //fprintf(stderr, "LEAVING STR %c\n", *(s->yycursor));
+  return true;
+}
+
+
 static bool
 tokenizer_tokenize_string(Tokenizer *tokenizer, TokenizerState *s, QuoteType q) {
   uint8_t quote_char = quote_type_to_char(q);
@@ -389,6 +494,18 @@ tokenizer_tokenize_string(Tokenizer *tokenizer, TokenizerState *s, QuoteType q) 
 
     * {
       if (*cursor == quote_char) {
+
+        // empty string
+        if(t.start_byte > 0 && cursor[-1] == quote_char) {
+          Token tt = {0, };
+          tt.type = TOKEN_TYPE_STR_CONTENT;
+          tt.start_byte = t.start_byte - 1;
+          tt.end_byte = tt.start_byte;
+          tokenizer_add_token(tokenizer, tt);
+        }
+
+        t.type = TOKEN_TYPE_QUOTE;
+        tokenizer_add_token_(tokenizer, s, t);
         goto done;
       } else {
         t.type = TOKEN_TYPE_OTHER;
@@ -455,6 +572,7 @@ end:
 TOKENIZER_NEXT_FUNC_START(c)
   /*!re2c
   !use:c_comments;
+  !use:c_identifier;
   !use:general;
   */
 TOKENIZER_NEXT_FUNC_END
@@ -467,6 +585,7 @@ TOKENIZER_NEXT_FUNC_START(cpp)
     goto end;
   }
 
+  !use:c_identifier;
   !use:c_comments;
   !use:general;
   */
@@ -475,6 +594,7 @@ TOKENIZER_NEXT_FUNC_END
 TOKENIZER_NEXT_FUNC_START(java)
   /*!re2c
   !use:c_comments;
+  !use:c_identifier;
   !use:general;
   */
 TOKENIZER_NEXT_FUNC_END
@@ -482,6 +602,7 @@ TOKENIZER_NEXT_FUNC_END
 TOKENIZER_NEXT_FUNC_START(javascript)
   /*!re2c
   !use:c_comments;
+  !use:c_identifier;
   !use:general;
   */
 TOKENIZER_NEXT_FUNC_END
@@ -489,6 +610,7 @@ TOKENIZER_NEXT_FUNC_END
 TOKENIZER_NEXT_FUNC_START(python)
   /*!re2c
   !use:underscore_numbers;
+  !use:c_identifier;
   !use:sharp_comments;
   !use:general;
   */
@@ -497,6 +619,17 @@ TOKENIZER_NEXT_FUNC_END
 TOKENIZER_NEXT_FUNC_START(ruby)
   /*!re2c
   !use:underscore_numbers;
+
+  "$\'" {
+    t.type = TOKEN_TYPE_RUBY_GLOBAL;
+    goto end;
+  }
+
+  [a-zA-Z_][a-zA-Z_0-9]*[\?!]? {
+    t.type = TOKEN_TYPE_ID;
+    goto end;
+  }
+  
   !use:sharp_comments;
   !use:general;
   */
@@ -505,6 +638,7 @@ TOKENIZER_NEXT_FUNC_END
 TOKENIZER_NEXT_FUNC_START(php)
   /*!re2c
   !use:c_comments;
+  !use:c_identifier;
   !use:general;
   */
 TOKENIZER_NEXT_FUNC_END
@@ -512,6 +646,7 @@ TOKENIZER_NEXT_FUNC_END
 TOKENIZER_NEXT_FUNC_START(go)
   /*!re2c
   !use:c_comments;
+  !use:c_identifier;
   !use:general;
   */
 TOKENIZER_NEXT_FUNC_END

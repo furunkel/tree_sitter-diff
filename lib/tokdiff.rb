@@ -15,7 +15,7 @@ module Tokdiff
 
   class Token
     def inspect
-      %Q(#<#{self.class} "#{text}">)
+      %Q(#<#{self.class} "#{text}" #{byte_range}>)
     end
   end
 

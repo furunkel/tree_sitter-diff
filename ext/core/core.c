@@ -774,6 +774,24 @@ rb_token_byte_range(VALUE self) {
   return rb_range_new(INT2FIX(start_byte), INT2FIX(end_byte - 1), false);
 }
 
+static VALUE
+rb_token_start_byte(VALUE self) {
+  RbToken *token;
+  TypedData_Get_Struct(self, RbToken, &token_type, token);
+
+  uint32_t start_byte = token->token.start_byte;
+  return INT2FIX(start_byte);
+}
+
+static VALUE
+rb_token_end_byte(VALUE self) {
+  RbToken *token;
+  TypedData_Get_Struct(self, RbToken, &token_type, token);
+
+  uint32_t end_byte = token->token.end_byte;
+  return INT2FIX(end_byte);
+}
+
 // static VALUE
 // rb_token_eql(VALUE self, VALUE rb_other) {
 //   RbToken *token;
@@ -817,7 +835,7 @@ rb_token_text(VALUE self) {
   size_t input_len = RSTRING_LEN(rb_input);
 
   if(start_byte == end_byte) {
-    return Qnil;
+    return rb_str_new("", 0);
   }
 
   if(start_byte >= input_len || end_byte > input_len) {
@@ -953,6 +971,9 @@ Init_core()
 
 
   rb_define_method(rb_cToken, "byte_range", rb_token_byte_range, 0);
+  rb_define_method(rb_cToken, "end_byte", rb_token_end_byte, 0);
+  rb_define_method(rb_cToken, "start_byte", rb_token_start_byte, 0);
+
   rb_define_method(rb_cToken, "text", rb_token_text, 0);
   rb_define_method(rb_cToken, "text?", rb_token_text_p, -1);
   // rb_define_method(rb_cToken, "==", rb_token_eql, 1);
