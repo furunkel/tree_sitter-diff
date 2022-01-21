@@ -223,6 +223,11 @@ quote_type_to_char(QuoteType t) {
     goto end;
   }
 
+  "<<" | ">>" | "||" | "&&" { 
+    t.type = TOKEN_TYPE_OPERATOR;
+    goto end;
+  }
+
   [;] / EOL_WS {
     t.type = TOKEN_TYPE_PUNCT;
     t.dont_start = true;
@@ -595,6 +600,12 @@ TOKENIZER_NEXT_FUNC_START(java)
   /*!re2c
   !use:c_comments;
   !use:c_identifier;
+
+  "<<<" | ">>>" { 
+    t.type = TOKEN_TYPE_OPERATOR;
+    goto end;
+  }
+
   !use:general;
   */
 TOKENIZER_NEXT_FUNC_END
@@ -638,6 +649,12 @@ TOKENIZER_NEXT_FUNC_END
 TOKENIZER_NEXT_FUNC_START(php)
   /*!re2c
   !use:c_comments;
+
+  '$' [a-zA-Z_][a-zA-Z_0-9]* {
+    t.type = TOKEN_TYPE_ID;
+    goto end;
+  }
+
   !use:c_identifier;
   !use:general;
   */

@@ -846,6 +846,50 @@ rb_token_text(VALUE self) {
 }
 
 static VALUE
+rb_token_starts_with_p(int argc, VALUE *argv, VALUE self) {
+  RbToken *token;
+  TypedData_Get_Struct(self, RbToken, &token_type, token);
+
+  uint32_t start_byte = token->token.start_byte;
+  uint32_t end_byte = token->token.end_byte;
+  VALUE rb_input = token->rb_input;
+  const char *input = RSTRING_PTR(rb_input);
+
+  for(int i = 0; i < argc; i++) {
+    VALUE rb_text = argv[i];
+    if(RB_TYPE_P(rb_text, T_STRING)) {
+      size_t text_len = RSTRING_LEN(rb_text);
+      if(text_len > end_byte - start_byte) return Qfalse;
+      if(text_len == 0) return Qtrue;
+      if(!rb_memcmp(input + start_byte, RSTRING_PTR(rb_text), text_len)) return Qtrue;
+    }
+  }
+  return Qfalse;
+}
+
+static VALUE
+rb_token_ends_with_p(int argc, VALUE *argv, VALUE self) {
+  RbToken *token;
+  TypedData_Get_Struct(self, RbToken, &token_type, token);
+
+  uint32_t start_byte = token->token.start_byte;
+  uint32_t end_byte = token->token.end_byte;
+  VALUE rb_input = token->rb_input;
+  const char *input = RSTRING_PTR(rb_input);
+
+  for(int i = 0; i < argc; i++) {
+    VALUE rb_text = argv[i];
+    if(RB_TYPE_P(rb_text, T_STRING)) {
+      size_t text_len = RSTRING_LEN(rb_text);
+      if(text_len > end_byte - start_byte) return Qfalse;
+      if(text_len == 0) return Qtrue;
+      if(!rb_memcmp(input + end_byte - text_len, RSTRING_PTR(rb_text), text_len)) return Qtrue;
+    }
+  }
+  return Qfalse;
+}
+
+static VALUE
 rb_token_text_p(int argc, VALUE *argv, VALUE self) {
   RbToken *token;
   TypedData_Get_Struct(self, RbToken, &token_type, token);
@@ -976,6 +1020,8 @@ Init_core()
 
   rb_define_method(rb_cToken, "text", rb_token_text, 0);
   rb_define_method(rb_cToken, "text?", rb_token_text_p, -1);
+  rb_define_method(rb_cToken, "starts_with?", rb_token_starts_with_p, -1);
+  rb_define_method(rb_cToken, "ends_with?", rb_token_ends_with_p, -1);
   // rb_define_method(rb_cToken, "==", rb_token_eql, 1);
   // rb_define_method(rb_cToken, "eql?", rb_token_eql, 1);
 
