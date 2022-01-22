@@ -613,6 +613,12 @@ TOKENIZER_NEXT_FUNC_END
 TOKENIZER_NEXT_FUNC_START(javascript)
   /*!re2c
   !use:c_comments;
+
+  "!==" | "===" { 
+    t.type = TOKEN_TYPE_CMP_OPERATOR;
+    goto end;
+  }
+
   !use:c_identifier;
   !use:general;
   */
@@ -636,6 +642,11 @@ TOKENIZER_NEXT_FUNC_START(ruby)
     goto end;
   }
 
+  "===" { 
+    t.type = TOKEN_TYPE_CMP_OPERATOR;
+    goto end;
+  }
+
   [a-zA-Z_][a-zA-Z_0-9]*[\?!]? {
     t.type = TOKEN_TYPE_ID;
     goto end;
@@ -652,6 +663,11 @@ TOKENIZER_NEXT_FUNC_START(php)
 
   '$' [a-zA-Z_][a-zA-Z_0-9]* {
     t.type = TOKEN_TYPE_ID;
+    goto end;
+  }
+
+  "!==" | "===" { 
+    t.type = TOKEN_TYPE_CMP_OPERATOR;
     goto end;
   }
 
