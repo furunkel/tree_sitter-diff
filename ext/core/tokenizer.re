@@ -449,6 +449,10 @@ tokenizer_swallow_string(Tokenizer *tokenizer, TokenizerState *s, QuoteType q) {
 
   /*!re2c
 
+    "\\'" | "\\`" | "\\\"" { 
+      goto end;
+    }
+
     ['"`] {
       if (*cursor == quote_char) {
         // empty string
