@@ -23,6 +23,7 @@ typedef enum {
   TOKEN_TYPE_STR_CONTENT,
   TOKEN_TYPE_ID,
   TOKEN_TYPE_RUBY_GLOBAL,
+  TOKEN_TYPE_FLOAT_LITERAL
 } TokenType;
 
 typedef enum {

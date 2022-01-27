@@ -125,6 +125,7 @@ tokenizer_state_save(TokenizerState *s) {
   OPEN_BRACKET = "(" | "[" | "{" | "<";
   CLOSED_BRACKET = ")" | "]" | "}" | ">";
   DIGITS = [0-9]+;
+  FLOAT_LITERAL = DIGITS+ ('.' DIGITS+)? (('E' | 'e') ('+' | '-')? DIGITS+ )? ;
   PUNCT = [!#$%&,\.\?@:;^_|~]+;
   ALPHA = [a-zA-Z]+;
   ARITH = "+" | "-" | "*" | "/" | "=";
@@ -223,6 +224,11 @@ quote_type_to_char(QuoteType t) {
     goto end;
   }
 
+  "+=" | "-=" | "/=" | "*=" | "%=" | "^=" | "|=" | "&=" | "<<=" | ">>=" { 
+    t.type = TOKEN_TYPE_OPERATOR;
+    goto end;
+  }
+
   "<<" | ">>" | "||" | "&&" { 
     t.type = TOKEN_TYPE_OPERATOR;
     goto end;
@@ -256,6 +262,11 @@ quote_type_to_char(QuoteType t) {
 
   ARITH {
     t.type = TOKEN_TYPE_ARITH;
+    goto end;
+  }
+
+  FLOAT_LITERAL {
+    t.type = TOKEN_TYPE_FLOAT_LITERAL;
     goto end;
   }
 
@@ -605,7 +616,7 @@ TOKENIZER_NEXT_FUNC_START(java)
   !use:c_comments;
   !use:c_identifier;
 
-  "<<<" | ">>>" { 
+  "<<<" | ">>>" | "<<<=" | ">>>=" { 
     t.type = TOKEN_TYPE_OPERATOR;
     goto end;
   }
@@ -633,6 +644,12 @@ TOKENIZER_NEXT_FUNC_START(python)
   !use:underscore_numbers;
   !use:c_identifier;
   !use:sharp_comments;
+
+  "//=" | "//" { 
+    t.type = TOKEN_TYPE_OPERATOR;
+    goto end;
+  }
+
   !use:general;
   */
 TOKENIZER_NEXT_FUNC_END
