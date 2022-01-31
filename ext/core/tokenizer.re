@@ -200,6 +200,13 @@ quote_type_to_char(QuoteType t) {
   }
 */
 
+/*!rules:re2c:compound_logical_assignment
+  "||=" | "&&=" {
+    t.type = TOKEN_TYPE_OPERATOR;
+    goto end;
+  }
+*/
+
 /*!rules:re2c:general
   [\n\r]+ { 
     if(tokenizer->ignore_whitespace) {
@@ -305,6 +312,11 @@ quote_type_to_char(QuoteType t) {
     t.type = TOKEN_TYPE_OTHER;
     goto end;
   }
+
+  Mn | Mc | Nd | Pc | [\u200D\u05F3] {
+    t.type = TOKEN_TYPE_OTHER;
+    goto end;
+  }  
 
   * { 
     t.type = TOKEN_TYPE_OTHER;
@@ -628,6 +640,7 @@ TOKENIZER_NEXT_FUNC_END
 TOKENIZER_NEXT_FUNC_START(javascript)
   /*!re2c
   !use:c_comments;
+  !use:compound_logical_assignment;
 
   "!==" | "===" { 
     t.type = TOKEN_TYPE_CMP_OPERATOR;
@@ -657,6 +670,7 @@ TOKENIZER_NEXT_FUNC_END
 TOKENIZER_NEXT_FUNC_START(ruby)
   /*!re2c
   !use:underscore_numbers;
+  RUBY_ID = [a-zA-Z_][a-zA-Z_0-9]*[\?!]?;
 
   "$\'" {
     t.type = TOKEN_TYPE_RUBY_GLOBAL;
@@ -668,10 +682,17 @@ TOKENIZER_NEXT_FUNC_START(ruby)
     goto end;
   }
 
-  [a-zA-Z_][a-zA-Z_0-9]*[\?!]? {
+  ":" RUBY_ID {
+    t.type = TOKEN_TYPE_RUBY_SYMBOL;
+    goto end;
+  }
+
+  RUBY_ID {
     t.type = TOKEN_TYPE_ID;
     goto end;
   }
+
+  !use:compound_logical_assignment;
   
   !use:sharp_comments;
   !use:general;
