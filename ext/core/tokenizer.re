@@ -193,6 +193,20 @@ quote_type_to_char(QuoteType t) {
   }
 */
 
+/*!rules:re2c:increment_decrement_operator
+  "++" | "--" {
+    t.type = TOKEN_TYPE_OPERATOR;
+    goto end;
+  }
+*/
+
+/*!rules:re2c:exp_operator
+  "**=" | "**" {
+    t.type = TOKEN_TYPE_OPERATOR;
+    goto end;
+  }
+*/
+
 /*!rules:re2c:c_identifier
   [a-zA-Z_][a-zA-Z_0-9]* {
     t.type = TOKEN_TYPE_ID;
@@ -605,6 +619,7 @@ TOKENIZER_NEXT_FUNC_START(c)
   /*!re2c
   !use:c_comments;
   !use:c_identifier;
+  !use:increment_decrement_operator;
   !use:general;
   */
 TOKENIZER_NEXT_FUNC_END
@@ -619,6 +634,7 @@ TOKENIZER_NEXT_FUNC_START(cpp)
 
   !use:c_identifier;
   !use:c_comments;
+  !use:increment_decrement_operator;
   !use:general;
   */
 TOKENIZER_NEXT_FUNC_END
@@ -627,6 +643,7 @@ TOKENIZER_NEXT_FUNC_START(java)
   /*!re2c
   !use:c_comments;
   !use:c_identifier;
+  !use:increment_decrement_operator;
 
   "<<<" | ">>>" | "<<<=" | ">>>=" { 
     t.type = TOKEN_TYPE_OPERATOR;
@@ -641,6 +658,8 @@ TOKENIZER_NEXT_FUNC_START(javascript)
   /*!re2c
   !use:c_comments;
   !use:compound_logical_assignment;
+  !use:increment_decrement_operator;
+  !use:exp_operator;
 
   "!==" | "===" { 
     t.type = TOKEN_TYPE_CMP_OPERATOR;
@@ -657,6 +676,8 @@ TOKENIZER_NEXT_FUNC_START(python)
   !use:underscore_numbers;
   !use:c_identifier;
   !use:sharp_comments;
+
+  !use:exp_operator;
 
   "//=" | "//" { 
     t.type = TOKEN_TYPE_OPERATOR;
@@ -693,6 +714,7 @@ TOKENIZER_NEXT_FUNC_START(ruby)
   }
 
   !use:compound_logical_assignment;
+  !use:exp_operator;
   
   !use:sharp_comments;
   !use:general;
@@ -708,6 +730,9 @@ TOKENIZER_NEXT_FUNC_START(php)
     goto end;
   }
 
+  !use:increment_decrement_operator;
+  !use:exp_operator;
+
   "!==" | "===" { 
     t.type = TOKEN_TYPE_CMP_OPERATOR;
     goto end;
@@ -722,6 +747,7 @@ TOKENIZER_NEXT_FUNC_START(go)
   /*!re2c
   !use:c_comments;
   !use:c_identifier;
+  !use:increment_decrement_operator;
   !use:general;
   */
 TOKENIZER_NEXT_FUNC_END
