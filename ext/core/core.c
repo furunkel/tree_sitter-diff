@@ -345,9 +345,25 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
     st_update(old_index_map, (st_data_t) key, update_callback, (st_data_t) &arg);
   }
 
+  // for(size_t i = 0; i < tokens_new_len; i++) {
+  //   Token *token = &tokens_new[i];
+  //   fprintf(stderr, "TOKEN OLD: %.*s\n", token->end_byte - token->start_byte, input_new + token->start_byte);
+  //   if(token->before_newline) {
+  //     fprintf(stderr, "BEFORE NEWLINE\n");
+  //   }
+  // }
+
   if(len_old > 0) {
+
+    fprintf(stderr, "NEW LOOP\n");
     for(size_t inew = start_new; inew < start_new + len_new; inew++) {
       Token *token = &tokens_new[inew];
+
+    //  fprintf(stderr, "TOKEN NEW: %.*s %d\n", token->end_byte - token->start_byte, input_new + token->start_byte, inew);
+      // if(token->before_newline) {
+      //    fprintf(stderr, "HAVE FOUND NEWLINE TOKEN\n");
+      //    abort();
+      // }
 
       // assert(_overlap->num_entries == 0);
 
@@ -373,12 +389,39 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
             // st_lookup(overlap, (st_data_t) (iold - 1), (st_data_t *) &prev_sub_len);
           }
 
-          if(!(prev_sub_len == 0 && token->dont_start)) {
+          /*if(!(prev_sub_len == 0 && token->dont_start))*/ {
             uint32_t new_sub_len = prev_sub_len + 1;
-            if(new_sub_len > sub_length) {
+            uint32_t new_sub_start_old = iold - new_sub_len + 1;
+            uint32_t new_sub_start_new = inew - new_sub_len + 1;
+
+            bool new_sub_ends_at_newline = false;
+            bool cur_sub_ends_at_newline = false;
+
+            if(sub_length > 0) {
+              int64_t cur_sub_last_token_index = sub_start_new + sub_length - 1;
+              int64_t new_sub_last_token_index = new_sub_start_new + new_sub_len - 1;
+
+              new_sub_ends_at_newline = new_sub_last_token_index > 0 && tokens_new[new_sub_last_token_index].before_newline;
+              cur_sub_ends_at_newline = cur_sub_last_token_index > 0 && tokens_new[cur_sub_last_token_index].before_newline;
+            }
+
+
+            if(new_sub_len > sub_length ||
+               (new_sub_len == sub_length && !cur_sub_ends_at_newline && new_sub_ends_at_newline)) {
+
+                if(new_sub_len == sub_length && (new_sub_ends_at_newline || !cur_sub_ends_at_newline)) {
+                  fprintf(stderr, "HAVE FOUND NEWLINE TOKEN\n");
+                  fprintf(stderr, "preferring (%d, %d) over (%d, %d)\n", sub_start_old, sub_length, new_sub_start_old, new_sub_len);
+                }
+
                 sub_length = new_sub_len;
-                sub_start_old = iold - sub_length + 1;
-                sub_start_new = inew - sub_length + 1;
+                sub_start_old = new_sub_start_old;
+                sub_start_new = new_sub_start_new;
+
+                // fprintf(stderr, "%d => %d\n", new_sub_start_old, iold - sub_length + 1);
+                // fprintf(stderr, "%d => %d\n", new_sub_start_new, inew - sub_length + 1);
+                // sub_start_old = iold - sub_length + 1;
+                // sub_start_new = inew - sub_length + 1;
             }
             assert(sub_length <= len_old);
             assert(sub_length <= len_new);
@@ -705,7 +748,13 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_language, VALUE rb_old, VALUE rb_new, VAL
   index_list.len = 0;
   index_list.entries = RB_ALLOC_N(st_data_t, index_list.capa);
 
-
+  // for(size_t i = 0; i < tokens_new_len; i++) {
+  //   Token *token = &tokens_new[i];
+  //   fprintf(stderr, "TOKEN OLD: %.*s\n", token->end_byte - token->start_byte, input_new + token->start_byte);
+  //   if(token->before_newline) {
+  //     fprintf(stderr, "BEFORE NEWLINE\n");
+  //   }
+  // }
 
   IntIntMap overlap;
   IntIntMap _overlap;
@@ -715,24 +764,39 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_language, VALUE rb_old, VALUE rb_new, VAL
 
   st_table *old_index_map = st_init_table(&type_index_key_hash);
 
-  ssize_t i;
-  for(i = 0; i < MIN(tokens_old_len, tokens_new_len); i++) {
-    assert(tokens_old[i].end_byte <= input_old_len);
-    assert(tokens_new[i].end_byte <= input_new_len);
-    if(!token_eql(&tokens_old[i], input_old, &tokens_new[i], input_new)) break;
+  ssize_t prefix_len = 0;
+  ssize_t tokens_min_len = MIN(tokens_old_len, tokens_new_len);
+  for(ssize_t i = 0; i < tokens_min_len; i++) {
+    Token *old_token = &tokens_old[i];
+    Token *new_token = &tokens_new[i];
+
+    assert(old_token->end_byte <= input_old_len);
+    assert(new_token->end_byte <= input_new_len);
+
+    if(old_token->before_newline && new_token->before_newline) {
+      prefix_len = MIN(tokens_min_len, i + 1);
+    }
+    if(!token_eql(old_token, input_old, new_token, input_new)) break;
   }
-  ssize_t prefix_len = i;
 
   if(prefix_len == tokens_old_len && prefix_len == tokens_new_len) {
     goto done;
   }
 
-  for(i = 0; tokens_old_len - i > prefix_len && tokens_new_len - i > prefix_len; i++) {
+  ssize_t suffix_len = 0;
+  for(ssize_t i = 0; tokens_old_len - i > prefix_len && tokens_new_len - i > prefix_len; i++) {
     // assert(tokens_old[i - 1].end_byte <= input_old_len);
     // assert(tokens_new[i - 1].end_byte <= input_new_len);
-    if(!token_eql(&tokens_old[tokens_old_len - i - 1], input_old, &tokens_new[tokens_new_len - i - 1], input_new)) break;
+    Token *old_token = &tokens_old[tokens_old_len - i - 1];
+    Token *new_token = &tokens_new[tokens_new_len - i - 1];
+    if(old_token->before_newline && new_token->before_newline) {
+      suffix_len = i;
+    }
+    if(!token_eql(old_token, input_old, new_token, input_new)) break;
   }
-  ssize_t suffix_len = i;
+
+  suffix_len = 0;
+  prefix_len = 0;
 
   assert(suffix_len + prefix_len <= tokens_old_len);
   assert(suffix_len + prefix_len <= tokens_new_len);

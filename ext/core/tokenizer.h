@@ -25,6 +25,7 @@ typedef enum {
   TOKEN_TYPE_RUBY_GLOBAL,
   TOKEN_TYPE_FLOAT_LITERAL,
   TOKEN_TYPE_RUBY_SYMBOL,
+  TOKEN_TYPE_PREPROC_DIRECTIVE,
 } TokenType;
 
 typedef enum {
@@ -56,7 +57,7 @@ typedef enum {
 typedef struct {
   uint32_t start_byte;
   uint32_t end_byte;
-  bool dont_start;
+  bool before_newline;
   uint16_t type;
 } Token;
 

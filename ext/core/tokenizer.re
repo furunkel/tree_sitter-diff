@@ -76,6 +76,15 @@ tokenizer_add_token(Tokenizer *tokenizer, Token token) {
 }
 
 static void
+tokenizer_newline(Tokenizer *tokenizer, TokenizerState *state) {
+  if(tokenizer->tokens_len > 0) {
+    Token *last_token = &tokenizer->tokens[tokenizer->tokens_len - 1];
+    last_token->before_newline = true;
+    //fprintf(stderr, "TOKEN NEWLINE: %.*s\n", last_token->end_byte - last_token->start_byte, state->padded_input + last_token->start_byte);
+  }
+}
+
+static void
 tokenizer_add_token_(Tokenizer *tokenizer, TokenizerState *state, Token token) {
   token.end_byte = state->yycursor - state->padded_input;
 
@@ -186,6 +195,14 @@ quote_type_to_char(QuoteType t) {
   }
 */
 
+
+/*!rules:re2c:c_preproc_directive
+  '#' [a-z]+ {
+    t.type = TOKEN_TYPE_PREPROC_DIRECTIVE;
+    goto end;
+  }
+*/
+
 /*!rules:re2c:underscore_numbers
   DIGITS ("_" DIGITS)+ {
     t.type = TOKEN_TYPE_DIGIT;
@@ -223,6 +240,7 @@ quote_type_to_char(QuoteType t) {
 
 /*!rules:re2c:general
   [\n\r]+ { 
+    tokenizer_newline(tokenizer, s);
     if(tokenizer->ignore_whitespace) {
       goto redo;
     } else {
@@ -255,12 +273,6 @@ quote_type_to_char(QuoteType t) {
     goto end;
   }
 
-  [;] / EOL_WS {
-    t.type = TOKEN_TYPE_PUNCT;
-    t.dont_start = true;
-    goto end;
-  }
-
   PUNCT {
     t.type = TOKEN_TYPE_PUNCT;
     goto end;
@@ -271,11 +283,6 @@ quote_type_to_char(QuoteType t) {
     goto end;
   }
 
-  CLOSED_BRACKET / EOL_WS {
-    t.type = TOKEN_TYPE_BRACKET;
-    t.dont_start = true;
-    goto end;
-  }
   CLOSED_BRACKET {
     t.type = TOKEN_TYPE_BRACKET;
     goto end;
@@ -619,6 +626,7 @@ TOKENIZER_NEXT_FUNC_START(c)
   /*!re2c
   !use:c_comments;
   !use:c_identifier;
+  !use:c_preproc_directive;
   !use:increment_decrement_operator;
   !use:general;
   */
@@ -632,6 +640,7 @@ TOKENIZER_NEXT_FUNC_START(cpp)
     goto end;
   }
 
+  !use:c_preproc_directive;
   !use:c_identifier;
   !use:c_comments;
   !use:increment_decrement_operator;
