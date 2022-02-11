@@ -354,8 +354,6 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
   // }
 
   if(len_old > 0) {
-
-    fprintf(stderr, "NEW LOOP\n");
     for(size_t inew = start_new; inew < start_new + len_new; inew++) {
       Token *token = &tokens_new[inew];
 

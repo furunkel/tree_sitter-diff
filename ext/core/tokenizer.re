@@ -739,6 +739,11 @@ TOKENIZER_NEXT_FUNC_START(php)
     goto end;
   }
 
+  '<?php' | '<?' | '<?=' | '?>' {
+    t.type = TOKEN_TYPE_PHP_TAG;
+    goto end;
+  }
+
   !use:increment_decrement_operator;
   !use:exp_operator;
 
