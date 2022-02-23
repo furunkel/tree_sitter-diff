@@ -407,10 +407,10 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
             if(new_sub_len > sub_length ||
                (new_sub_len == sub_length && !cur_sub_ends_at_newline && new_sub_ends_at_newline)) {
 
-                if(new_sub_len == sub_length && (new_sub_ends_at_newline || !cur_sub_ends_at_newline)) {
-                  fprintf(stderr, "HAVE FOUND NEWLINE TOKEN\n");
-                  fprintf(stderr, "preferring (%d, %d) over (%d, %d)\n", sub_start_old, sub_length, new_sub_start_old, new_sub_len);
-                }
+                // if(new_sub_len == sub_length && (new_sub_ends_at_newline || !cur_sub_ends_at_newline)) {
+                //   fprintf(stderr, "HAVE FOUND NEWLINE TOKEN\n");
+                //   fprintf(stderr, "preferring (%d, %d) over (%d, %d)\n", new_sub_start_old, new_sub_len, sub_start_old, sub_length);
+                // }
 
                 sub_length = new_sub_len;
                 sub_start_old = new_sub_start_old;
@@ -771,15 +771,17 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_language, VALUE rb_old, VALUE rb_new, VAL
     assert(old_token->end_byte <= input_old_len);
     assert(new_token->end_byte <= input_new_len);
 
+    if(!token_eql(old_token, input_old, new_token, input_new)) break;
+
     if(old_token->before_newline && new_token->before_newline) {
       prefix_len = MIN(tokens_min_len, i + 1);
     }
-    if(!token_eql(old_token, input_old, new_token, input_new)) break;
   }
 
   if(prefix_len == tokens_old_len && prefix_len == tokens_new_len) {
     goto done;
   }
+
 
   ssize_t suffix_len = 0;
   for(ssize_t i = 0; tokens_old_len - i > prefix_len && tokens_new_len - i > prefix_len; i++) {
@@ -787,14 +789,15 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_language, VALUE rb_old, VALUE rb_new, VAL
     // assert(tokens_new[i - 1].end_byte <= input_new_len);
     Token *old_token = &tokens_old[tokens_old_len - i - 1];
     Token *new_token = &tokens_new[tokens_new_len - i - 1];
+    if(!token_eql(old_token, input_old, new_token, input_new)) break;
+
     if(old_token->before_newline && new_token->before_newline) {
       suffix_len = i;
     }
-    if(!token_eql(old_token, input_old, new_token, input_new)) break;
   }
 
-  suffix_len = 0;
-  prefix_len = 0;
+  // suffix_len = 0;
+  // prefix_len = 0;
 
   assert(suffix_len + prefix_len <= tokens_old_len);
   assert(suffix_len + prefix_len <= tokens_new_len);

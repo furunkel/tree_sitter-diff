@@ -27,6 +27,8 @@ typedef enum {
   TOKEN_TYPE_RUBY_SYMBOL,
   TOKEN_TYPE_PREPROC_DIRECTIVE,
   TOKEN_TYPE_PHP_TAG,
+  TOKEN_TYPE_GO_SHORT_VAR_DECL,
+
 } TokenType;
 
 typedef enum {

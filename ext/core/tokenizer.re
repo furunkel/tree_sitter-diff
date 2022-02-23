@@ -135,7 +135,7 @@ tokenizer_state_save(TokenizerState *s) {
   CLOSED_BRACKET = ")" | "]" | "}" | ">";
   DIGITS = [0-9]+;
   FLOAT_LITERAL = DIGITS+ ('.' DIGITS+)? (('E' | 'e') ('+' | '-')? DIGITS+ )? ;
-  PUNCT = [!#$%&,\.\?@:;^_|~]+;
+  PUNCT = [!#$%&,\.\?@:;^_|~];
   ALPHA = [a-zA-Z]+;
   ARITH = "+" | "-" | "*" | "/" | "=";
 */
@@ -744,6 +744,11 @@ TOKENIZER_NEXT_FUNC_START(php)
     goto end;
   }
 
+  '$' [a-zA-Z_][a-zA-Z_0-9]* {
+    t.type = TOKEN_TYPE_ID;
+    goto end;
+  }
+
   !use:increment_decrement_operator;
   !use:exp_operator;
 
@@ -761,6 +766,12 @@ TOKENIZER_NEXT_FUNC_START(go)
   /*!re2c
   !use:c_comments;
   !use:c_identifier;
+
+  ":=" {
+    t.type = TOKEN_TYPE_GO_SHORT_VAR_DECL;
+    goto end;
+  }
+
   !use:increment_decrement_operator;
   !use:general;
   */
