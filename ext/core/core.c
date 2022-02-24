@@ -954,11 +954,9 @@ rb_token_ends_with_p(int argc, VALUE *argv, VALUE self) {
   return Qfalse;
 }
 
-static VALUE
-rb_token_text_p(int argc, VALUE *argv, VALUE self) {
-  RbToken *token;
-  TypedData_Get_Struct(self, RbToken, &token_type, token);
 
+static VALUE
+rb_token_text_p_(RbToken *token, int argc, VALUE *argv) {
   uint32_t start_byte = token->token.start_byte;
   uint32_t end_byte = token->token.end_byte;
   VALUE rb_input = token->rb_input;
@@ -973,18 +971,31 @@ rb_token_text_p(int argc, VALUE *argv, VALUE self) {
 
   for(int i = 0; i < argc; i++) {
     VALUE rb_text = argv[i];
-    if(RB_TYPE_P(rb_text, T_STRING)) {
-      size_t text_len = RSTRING_LEN(rb_text);
+    Check_Type(rb_text, T_STRING);
 
-      if(text_len != end_byte - start_byte) continue;
-      if(start_byte == end_byte && text_len == 0) return Qtrue;
+    size_t text_len = RSTRING_LEN(rb_text);
 
-      if(!rb_memcmp(input + start_byte, RSTRING_PTR(rb_text), end_byte - start_byte)) {
-        return Qtrue;
-      }
+    if(text_len != end_byte - start_byte) continue;
+    if(start_byte == end_byte && text_len == 0) return Qtrue;
+
+    if(!rb_memcmp(input + start_byte, RSTRING_PTR(rb_text), end_byte - start_byte)) {
+      return Qtrue;
     }
   }
   return Qfalse;
+}
+
+static VALUE
+rb_token_text_p(int argc, VALUE *argv, VALUE self) {
+  RbToken *token;
+  TypedData_Get_Struct(self, RbToken, &token_type, token);
+
+  if(argc == 1 && RB_TYPE_P(argv[0], T_ARRAY)) {
+    return rb_token_text_p_(token, RARRAY_LEN(argv[0]), RARRAY_PTR(argv[0]));
+  } else {
+    return rb_token_text_p_(token, argc, argv);
+  }
+
 }
 
 static VALUE
