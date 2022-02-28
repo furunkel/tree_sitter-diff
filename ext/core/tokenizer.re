@@ -88,7 +88,8 @@ static void
 tokenizer_add_token_(Tokenizer *tokenizer, TokenizerState *state, Token token) {
   token.end_byte = state->yycursor - state->padded_input;
 
-  //fprintf(stderr, "TOKEN: %.*s\n", token.end_byte - token.start_byte, state->padded_input + token.start_byte);
+  //fprintf(stderr, "TOKEN: %.*s (%d-%d)\n", token.end_byte - token.start_byte,
+  //        state->padded_input + token.start_byte, token.start_byte, token.end_byte);
 
   if(token.end_byte <= tokenizer->input_len) {
     tokenizer_add_token(tokenizer, token);

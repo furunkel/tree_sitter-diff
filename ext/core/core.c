@@ -313,12 +313,65 @@ rb_change_set_new(ChangeType change_type, VALUE rb_input,
   }
 }
 
+static void
+output_change_set(VALUE rb_out_ary, ChangeType change_type, VALUE rb_input_old, VALUE rb_input_new,
+                  Token *tokens_old, size_t start_old, size_t len_old,
+                  Token *tokens_new, size_t start_new, size_t len_new, bool split_lines) {
+
+  //FIXME: splitting modification is tricky...                    
+  if(change_type == CHANGE_TYPE_MOD || change_type == CHANGE_TYPE_EQL || !split_lines) {
+    rb_ary_push(rb_out_ary, rb_change_set_new_full(change_type, rb_input_old, rb_input_new,
+                                                    tokens_old, start_old, len_old,
+                                                    tokens_new, start_new, len_new));
+  } else {
+    size_t start, len;
+    Token *tokens;
+    VALUE rb_input;
+    switch(change_type) {
+      case CHANGE_TYPE_ADD: {
+        start = start_new;
+        len = len_new;
+        tokens = tokens_new;
+        rb_input = rb_input_new;
+        break;
+      }
+      case CHANGE_TYPE_DEL: {
+        start = start_old;
+        len = len_old;
+        tokens = tokens_old;
+        rb_input = rb_input_old;
+        break;
+      }
+      default: {
+        rb_raise(rb_eRuntimeError, "unexpected change type");
+      }
+    }
+
+    size_t end = start + len;
+    size_t next_start = start;
+
+    for(size_t i = start; i < end; i++) {
+      Token *token = &tokens[i];
+      if(token->before_newline) {
+        rb_ary_push(rb_out_ary, rb_change_set_new(change_type, rb_input, tokens, next_start, i - next_start + 1));
+        next_start = i + 1;
+      }
+    }
+
+    if(next_start < end) {
+      rb_ary_push(rb_out_ary, rb_change_set_new(change_type, rb_input, tokens, next_start, end - next_start));
+    }
+  }
+}
+
+
 
 // Loosely based on https://github.com/paulgb/simplediff
 static void
 token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKey *table_entries_old, IntIntMap *overlap,
           IntIntMap *_overlap, st_table *old_index_map, VALUE rb_input_old, VALUE rb_input_new,
-          uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new, VALUE rb_out_ary, bool output_eq) {
+          uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new, VALUE rb_out_ary,
+          bool output_eq, bool split_lines) {
 
   if(len_old == 0 && len_new == 0) return;
 
@@ -451,9 +504,14 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
   if(sub_length == 0) {
     size_t common_len = MIN(len_old, len_new);
     if(common_len > 0) {
-      rb_ary_push(rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_MOD, rb_input_old, rb_input_new,
-                                                     tokens_old, start_old, common_len,
-                                                     tokens_new, start_new, common_len));
+      output_change_set(rb_out_ary, CHANGE_TYPE_MOD, rb_input_old, rb_input_new,
+                        tokens_old, start_old, common_len,
+                        tokens_new, start_new, common_len,
+                        split_lines);
+
+      // rb_ary_push(rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_MOD, rb_input_old, rb_input_new,
+      //                                                tokens_old, start_old, common_len,
+      //                                                tokens_new, start_new, common_len));
       start_old += common_len;
       start_new += common_len;
       len_old -= common_len;
@@ -461,11 +519,20 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
     }
 
     if(len_old > 0) {
-      rb_ary_push(rb_out_ary, rb_change_set_new(CHANGE_TYPE_DEL, rb_input_old, tokens_old, start_old, len_old));
+      // rb_ary_push(rb_out_ary, rb_change_set_new(CHANGE_TYPE_DEL, rb_input_old, tokens_old, start_old, len_old));
+      output_change_set(rb_out_ary, CHANGE_TYPE_DEL, rb_input_old, Qnil,
+                        tokens_old, start_old, len_old,
+                        NULL, 0, 0,
+                        split_lines);
     }
 
     if(len_new > 0) {
-      rb_ary_push(rb_out_ary, rb_change_set_new(CHANGE_TYPE_ADD, rb_input_new, tokens_new, start_new, len_new));
+      // rb_ary_push(rb_out_ary, rb_change_set_new(CHANGE_TYPE_ADD, rb_input_new, tokens_new, start_new, len_new));
+      output_change_set(rb_out_ary, CHANGE_TYPE_ADD, Qnil, rb_input_new,
+                        NULL, 0, 0,
+                        tokens_new, start_new, len_new,
+                        split_lines);
+                        
     }
   } else {
     // st_clear(_overlap);
@@ -484,13 +551,17 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
     token_diff(tokens_old, tokens_new, index_list, table_entries_old, overlap, _overlap, old_index_map, rb_input_old, rb_input_new,
               start_old, sub_start_old - start_old,
               start_new, sub_start_new - start_new,
-              rb_out_ary, output_eq);
+              rb_out_ary, output_eq, split_lines);
 
 
     if(output_eq) {
-      rb_ary_push(rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_EQL, rb_input_old, rb_input_new,
-                                                     tokens_old, sub_start_old, sub_length,
-                                                     tokens_new, sub_start_new, sub_length));
+      output_change_set(rb_out_ary, CHANGE_TYPE_EQL, rb_input_old, rb_input_new,
+                        tokens_old, sub_start_old, sub_length,
+                        tokens_new, sub_start_new, sub_length,
+                        split_lines);
+      // rb_ary_push(rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_EQL, rb_input_old, rb_input_new,
+      //                                                tokens_old, sub_start_old, sub_length,
+      //                                                tokens_new, sub_start_new, sub_length));
     }
 
     // st_clear(_overlap);
@@ -503,7 +574,7 @@ token_diff(Token *tokens_old, Token *tokens_new, IndexValue *index_list, IndexKe
     token_diff(tokens_old, tokens_new, index_list, table_entries_old, overlap, _overlap, old_index_map, rb_input_old, rb_input_new,
               sub_start_old + sub_length, (start_old + len_old) - (sub_start_old + sub_length),
               sub_start_new + sub_length, (start_new + len_new) - (sub_start_new + sub_length),
-              rb_out_ary, output_eq);
+              rb_out_ary, output_eq, split_lines);
 
   }
 }
@@ -665,7 +736,9 @@ rb_tokdiff_tokenize_s(VALUE self, VALUE rb_language, VALUE rb_input, VALUE rb_ig
 #include <assert.h>
 
 static VALUE
-rb_tokdiff_diff_s(VALUE self, VALUE rb_language, VALUE rb_old, VALUE rb_new, VALUE rb_output_eq, VALUE rb_ignore_whitespace, VALUE rb_ignore_comments) {
+rb_tokdiff_diff_s(VALUE self, VALUE rb_language, VALUE rb_old, VALUE rb_new,
+                  VALUE rb_output_eq, VALUE rb_ignore_whitespace, VALUE rb_ignore_comments,
+                  VALUE rb_split_lines) {
   Check_Type(rb_old, T_STRING);
   Check_Type(rb_new, T_STRING);
   TokenizerLanguage language = sym2language(rb_language);
@@ -676,6 +749,7 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_language, VALUE rb_old, VALUE rb_new, VAL
   ssize_t tokens_new_len = 0;
 
   bool output_eq = RB_TEST(rb_output_eq);
+  bool split_lines = RB_TEST(rb_split_lines);
   bool ignore_whitespace = RB_TEST(rb_ignore_whitespace);
   bool ignore_comments = RB_TEST(rb_ignore_comments);
 
@@ -789,15 +863,19 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_language, VALUE rb_old, VALUE rb_new, VAL
     // assert(tokens_new[i - 1].end_byte <= input_new_len);
     Token *old_token = &tokens_old[tokens_old_len - i - 1];
     Token *new_token = &tokens_new[tokens_new_len - i - 1];
-    if(!token_eql(old_token, input_old, new_token, input_new)) break;
 
     if(old_token->before_newline && new_token->before_newline) {
       suffix_len = i;
     }
+
+    if(!token_eql(old_token, input_old, new_token, input_new)) break;
+
   }
 
   // suffix_len = 0;
   // prefix_len = 0;
+
+  fprintf(stderr, "PREFIX/SUFFIX: %d/%d\n", prefix_len, suffix_len);
 
   assert(suffix_len + prefix_len <= tokens_old_len);
   assert(suffix_len + prefix_len <= tokens_new_len);
@@ -811,7 +889,8 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_language, VALUE rb_old, VALUE rb_new, VAL
   assert(suffix_len + prefix_len < MAX(tokens_old_len, tokens_new_len));
 
   token_diff(tokens_old, tokens_new, &index_list, table_entries_old, &overlap, &_overlap, old_index_map,
-            rb_old, rb_new, prefix_len, tokens_old_len - suffix_len - prefix_len, prefix_len, tokens_new_len - suffix_len - prefix_len, rb_out_ary, output_eq);
+            rb_old, rb_new, prefix_len, tokens_old_len - suffix_len - prefix_len,
+            prefix_len, tokens_new_len - suffix_len - prefix_len, rb_out_ary, output_eq, split_lines);
 
   // token_diff(tokens_old, tokens_new, &index_list, table_entries_old, overlap, _overlap, old_index_map,
   //           rb_old, rb_new, 0, tokens_old_len, 0, tokens_new_len, rb_out_ary, output_eq);
@@ -1075,7 +1154,7 @@ Init_core()
   rb_mTokdiff = rb_define_module("Tokdiff");
   rb_eTokdiffError = rb_define_class_under(rb_mTokdiff, "Error", rb_eStandardError);
 
-  rb_define_singleton_method(rb_mTokdiff, "__diff__", rb_tokdiff_diff_s, 6);
+  rb_define_singleton_method(rb_mTokdiff, "__diff__", rb_tokdiff_diff_s, 7);
   rb_define_singleton_method(rb_mTokdiff, "__tokenize__", rb_tokdiff_tokenize_s, 4);
 
   rb_cChangeSet = rb_define_class_under(rb_mTokdiff, "ChangeSet", rb_cObject);

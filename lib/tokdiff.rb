@@ -5,8 +5,8 @@ require_relative 'tokdiff/core'
 
 module Tokdiff
 
-  def self.diff(language, old, new, output_equal: false, ignore_whitespace: true, ignore_comments: false)
-    __diff__ language.to_sym, old, new, output_equal, ignore_whitespace, ignore_comments
+  def self.diff(language, old, new, output_equal: false, ignore_whitespace: true, ignore_comments: false, split_lines: false)
+    __diff__ language.to_sym, old, new, output_equal, ignore_whitespace, ignore_comments, split_lines
   end
 
   def self.tokenize(language, input, ignore_whitespace: true, ignore_comments: false)
