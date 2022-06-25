@@ -875,7 +875,7 @@ rb_tokdiff_diff_s(VALUE self, VALUE rb_language, VALUE rb_old, VALUE rb_new,
   // suffix_len = 0;
   // prefix_len = 0;
 
-  fprintf(stderr, "PREFIX/SUFFIX: %d/%d\n", prefix_len, suffix_len);
+  // fprintf(stderr, "PREFIX/SUFFIX: %d/%d\n", prefix_len, suffix_len);
 
   assert(suffix_len + prefix_len <= tokens_old_len);
   assert(suffix_len + prefix_len <= tokens_new_len);
