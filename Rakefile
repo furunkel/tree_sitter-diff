@@ -17,19 +17,19 @@ task default: %i[test rubocop]
 
 require "rake/extensiontask"
 Rake::ExtensionTask.new("core") do |ext|
-  ext.lib_dir = 'lib/tokdiff'
+  ext.lib_dir = 'lib/tree_sitter/diff'
 end
 
 def ext_path(filename)
   File.join('ext', 'core', filename)
 end
 
-file ext_path('tokenizer.c') => ext_path('tokenizer.re') do |t|
-  sh "re2c #{t.prerequisites.join ' '} -o #{t.name}"
-end
+#file ext_path('tokenizer.c') => ext_path('tokenizer.re') do |t|
+#  sh "re2c #{t.prerequisites.join ' '} -o #{t.name}"
+#end
 
-Rake::Task[:compile].enhance [ext_path('tokenizer.c'), ext_path('tokenizer.re')]
+#Rake::Task[:compile].enhance [ext_path('tokenizer.c'), ext_path('tokenizer.re')]
 
 task :console do
-  exec "irb -I lib -r tokdiff"
+  exec "irb -I lib -r tree_sitter/diff"
 end

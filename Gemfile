@@ -2,7 +2,7 @@
 
 source "https://rubygems.org"
 
-# Specify your gem's dependencies in tokdiff.gemspec
+# Specify your gem's dependencies in tree_sitter-diff.gemspec
 gemspec
 
 gem "rake", "~> 13.0"

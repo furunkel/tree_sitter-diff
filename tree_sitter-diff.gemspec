@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
-require_relative "lib/tokdiff/version"
+require_relative "lib/tree_sitter/diff/version"
 
 Gem::Specification.new do |spec|
-  spec.name = "tokdiff"
+  spec.name = "tree_sitter-diff"
   spec.version = Tokdiff::VERSION
   spec.authors = ["furunkel"]
   spec.email = ["furunkel@polyadic.com"]
