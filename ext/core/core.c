@@ -36,6 +36,7 @@ typedef struct {
   uint32_t start_byte;
   uint32_t end_byte;
   bool implicit;
+  bool before_newline;
 } Token;
 
 typedef struct TokenArray {
@@ -44,7 +45,7 @@ typedef struct TokenArray {
   size_t capa;
 } TokenArray;
 
-TokenArray rb_node_tokenize_(VALUE self, VALUE rb_whitespace);
+TokenArray rb_node_tokenize_(VALUE self, VALUE rb_ignore_whitespace, VALUE rb_ignore_comments);
 const char *rb_node_input_(VALUE self, uint32_t *start, uint32_t *len);
 VALUE rb_new_token_from_ptr(Token *orig_token);
 
@@ -376,7 +377,7 @@ output_change_set(VALUE rb_out_ary, ChangeType change_type, VALUE rb_input_old, 
 
     for(size_t i = start; i < end; i++) {
       Token *token = &tokens->data[i];
-      if(false /*token->before_newline*/) {
+      if(token->before_newline) {
         rb_ary_push(rb_out_ary, rb_change_set_new(change_type, rb_input, tokens, next_start, i - next_start + 1));
         next_start = i + 1;
       }
@@ -419,8 +420,8 @@ token_diff(TokenArray *tokens_old, TokenArray *tokens_new, IndexValue *index_lis
     st_update(old_index_map, (st_data_t) key, update_callback, (st_data_t) &arg);
   }
 
-  // for(size_t i = 0; i < tokens_new_len; i++) {
-  //   Token *token = &tokens_new[i];
+  // for(size_t i = 0; i < tokens_new->len; i++) {
+  //   Token *token = &tokens_new->data[i];
   //   fprintf(stderr, "TOKEN OLD: %.*s\n", token->end_byte - token->start_byte, input_new + token->start_byte);
   //   if(token->before_newline) {
   //     fprintf(stderr, "BEFORE NEWLINE\n");
@@ -432,10 +433,10 @@ token_diff(TokenArray *tokens_old, TokenArray *tokens_new, IndexValue *index_lis
       Token *token = &tokens_new->data[inew];
 
     //  fprintf(stderr, "TOKEN NEW: %.*s %d\n", token->end_byte - token->start_byte, input_new + token->start_byte, inew);
-      // if(token->before_newline) {
-      //    fprintf(stderr, "HAVE FOUND NEWLINE TOKEN\n");
-      //    abort();
-      // }
+    //   if(token->before_newline) {
+    //      fprintf(stderr, "HAVE FOUND NEWLINE TOKEN\n");
+    //     //  abort();
+    //   }
 
       // assert(_overlap->num_entries == 0);
 
@@ -473,8 +474,8 @@ token_diff(TokenArray *tokens_old, TokenArray *tokens_new, IndexValue *index_lis
               int64_t cur_sub_last_token_index = sub_start_new + sub_length - 1;
               int64_t new_sub_last_token_index = new_sub_start_new + new_sub_len - 1;
 
-              new_sub_ends_at_newline = new_sub_last_token_index > 0 && false /*tokens_new[new_sub_last_token_index].before_newline*/;
-              cur_sub_ends_at_newline = cur_sub_last_token_index > 0 && false /*tokens_new[cur_sub_last_token_index].before_newline*/;
+              new_sub_ends_at_newline = new_sub_last_token_index > 0 && tokens_new->data[new_sub_last_token_index].before_newline;
+              cur_sub_ends_at_newline = cur_sub_last_token_index > 0 && tokens_new->data[cur_sub_last_token_index].before_newline;
             }
 
 
@@ -686,19 +687,14 @@ rb_change_set_type(VALUE self) {
 
 static VALUE
 rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
-                  VALUE rb_output_eq, VALUE rb_ignore_whitespace, VALUE rb_ignore_comments,
-                  VALUE rb_split_lines) {
+                  VALUE rb_output_eq, VALUE rb_ignore_whitespace, VALUE rb_ignore_comments) {
 
   // FIXME: check node
   // Check_Type(rb_old, T_STRING);
   // Check_Type(rb_new, T_STRING);
-  size_t tokens_capa = 512;
-  size_t tokens_len = 0;
-  ssize_t tokens_old_len = 0;
-  ssize_t tokens_new_len = 0;
 
   bool output_eq = RB_TEST(rb_output_eq);
-  bool split_lines = RB_TEST(rb_split_lines);
+  bool split_lines = false; //RB_TEST(rb_split_lines);
   bool ignore_whitespace = RB_TEST(rb_ignore_whitespace);
   bool ignore_comments = RB_TEST(rb_ignore_comments);
 
@@ -715,8 +711,11 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
     return rb_out_ary;
   }
 
-  TokenArray tokens_old = rb_node_tokenize_(rb_old, ignore_whitespace);
-  TokenArray tokens_new = rb_node_tokenize_(rb_new, ignore_whitespace);
+  TokenArray tokens_old = rb_node_tokenize_(rb_old, ignore_whitespace, ignore_comments);
+  TokenArray tokens_new = rb_node_tokenize_(rb_new, ignore_whitespace, ignore_comments);
+
+  ssize_t tokens_old_len = (ssize_t) tokens_old.len;
+  ssize_t tokens_new_len = (ssize_t) tokens_new.len;
 
   IndexKey *table_entries_old = RB_ALLOC_N(IndexKey, tokens_old_len);
 
@@ -747,13 +746,13 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
     Token *old_token = &tokens_old.data[i];
     Token *new_token = &tokens_new.data[i];
 
-    assert(old_token->end_byte <= input_old_len);
-    assert(new_token->end_byte <= input_new_len);
+    assert(old_token->end_byte <= input_old_start + input_old_len);
+    assert(new_token->end_byte <= input_new_start + input_new_len);
 
     if(!token_eql(old_token, input_old, new_token, input_new)) break;
 
 
-    if(false /*old_token->before_newline && new_token->before_newline*/) {
+    if(old_token->before_newline && new_token->before_newline) {
       prefix_len = MIN(tokens_min_len, i + 1);
     }
   }
@@ -770,7 +769,7 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
     Token *old_token = &tokens_old.data[tokens_old_len - i - 1];
     Token *new_token = &tokens_new.data[tokens_new_len - i - 1];
 
-    if(false /* old_token->before_newline && new_token->before_newline*/) {
+    if(old_token->before_newline && new_token->before_newline) {
       suffix_len = i;
     }
 
@@ -780,8 +779,6 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
 
   // suffix_len = 0;
   // prefix_len = 0;
-
-  // fprintf(stderr, "PREFIX/SUFFIX: %d/%d\n", prefix_len, suffix_len);
 
   assert(suffix_len + prefix_len <= tokens_old_len);
   assert(suffix_len + prefix_len <= tokens_new_len);
@@ -880,10 +877,10 @@ Init_core()
   id_mod = rb_intern("!");
 
   VALUE rb_mTreeSitter = rb_define_module("TreeSitter");
-  rb_mTSDiff = rb_define_module_under(rb_mTreeSitter, "Tokdiff");
+  rb_mTSDiff = rb_define_module_under(rb_mTreeSitter, "Diff");
   rb_eTsDiffError = rb_define_class_under(rb_mTSDiff, "Error", rb_eStandardError);
 
-  rb_define_singleton_method(rb_mTSDiff, "__diff__", rb_ts_diff_diff_s, 7);
+  rb_define_singleton_method(rb_mTSDiff, "__diff__", rb_ts_diff_diff_s, 5);
 
   rb_cChangeSet = rb_define_class_under(rb_mTSDiff, "ChangeSet", rb_cObject);
 
