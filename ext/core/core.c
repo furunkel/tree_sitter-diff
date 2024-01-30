@@ -48,18 +48,13 @@ typedef struct TokenArray {
 TokenArray rb_node_tokenize_(VALUE self, VALUE rb_ignore_whitespace, VALUE rb_ignore_comments);
 const char *rb_node_input_(VALUE self, uint32_t *start, uint32_t *len);
 VALUE rb_new_token_from_ptr(Token *orig_token);
-
+void tree_sitter_token_mark(Token *token);
 
 typedef struct {
   uint32_t capa;
   uint32_t len;
   st_data_t *entries;
 } IndexValue;
-
-typedef struct {
-  VALUE rb_input;
-  Token token;
-} RbToken;
 
 typedef struct {
   uint32_t start_byte;
@@ -70,8 +65,10 @@ typedef struct {
 typedef struct {
   VALUE rb_old;
   VALUE rb_new;
-  Token *tokens;
-  uint32_t len;
+  Token *old_tokens;
+  Token *new_tokens;
+  uint32_t old_len;
+  uint32_t new_len;
   uint8_t change_type;
 } ChangeSet;
 
@@ -82,39 +79,49 @@ typedef enum {
   CHANGE_TYPE_MOD,
 } ChangeType;
 
-static void token_free(void *ptr)
-{
-  xfree(ptr);
-}
+typedef struct {
+  uint32_t *data;
+  uint32_t min_index;
+  uint32_t max_index;
+} IntIntMap;
 
-static void token_mark(void *ptr) {
-  RbToken *token = (RbToken *) ptr;
-  rb_gc_mark(token->rb_input);
-}
-
-static const rb_data_type_t token_type = {
-    .wrap_struct_name = "Token",
-    .function = {
-        .dmark = token_mark,
-        .dfree = token_free,
-        .dsize = NULL,
-    },
-    .data = NULL,
-    .flags = RUBY_TYPED_FREE_IMMEDIATELY,
-};
-
+typedef struct {
+  TokenArray tokens_old;
+  TokenArray tokens_new;
+  IntIntMap overlap;
+  IntIntMap _overlap;
+  IndexValue index_list;
+  IndexKey *table_entries_old;
+  st_table *old_index_map;
+  const char *input_old;
+  const char *input_new;
+  VALUE rb_old;
+  VALUE rb_new;
+  VALUE rb_out_ary;
+  bool output_eq;
+  bool split_lines;
+} DiffContext;
 
 static void change_set_free(void *ptr)
 {
   ChangeSet *change_set = (ChangeSet *) ptr;
-  xfree(change_set->tokens);
+  xfree(change_set->old_tokens);
+  xfree(change_set->new_tokens);
   xfree(ptr);
 }
 
 static void change_set_mark(void *ptr) {
   ChangeSet *change_set = (ChangeSet *) ptr;
   rb_gc_mark(change_set->rb_old);
-  rb_gc_mark(change_set->rb_old);
+  rb_gc_mark(change_set->rb_new);
+
+  for(size_t i = 0; i < change_set->old_len; i++) {
+    tree_sitter_token_mark(&change_set->old_tokens[i]);
+  }
+
+  for(size_t i = 0; i < change_set->new_len; i++) {
+    tree_sitter_token_mark(&change_set->new_tokens[i]);
+  }
 }
 
 static const rb_data_type_t change_set_type = {
@@ -267,12 +274,6 @@ update_callback(st_data_t *key, st_data_t *value, st_data_t arg, int existing) {
   return ST_CONTINUE;
 }
 
-typedef struct {
-  uint32_t *data;
-  uint32_t min_index;
-  uint32_t max_index;
-} IntIntMap;
-
 static void
 int_int_map_init(IntIntMap *map, uint32_t capa) {
   map->data = RB_ZALLOC_N(uint32_t, capa);
@@ -309,13 +310,17 @@ rb_change_set_new_full(ChangeType change_type, VALUE rb_old, VALUE rb_new,
   change_set->change_type = change_type;
   change_set->rb_old = rb_old;
   change_set->rb_new = rb_new;
-  change_set->len = MAX(old_len, new_len);
+  change_set->old_len = old_len;
+  change_set->new_len = new_len;
 
   assert(old_len == 0 || new_len == 0 || old_len == new_len);
-  change_set->tokens = RB_ALLOC_N(Token, old_len + new_len);
+  change_set->old_tokens = RB_ALLOC_N(Token, old_len);
+  change_set->new_tokens = RB_ALLOC_N(Token, new_len);
 
-  memcpy(change_set->tokens, old_tokens->data + old_start, old_len * sizeof(Token));
-  memcpy(change_set->tokens + old_len, new_tokens->data + new_start, new_len * sizeof(Token));
+  // fprintf(stderr, "TOKEN SET %d/%d  %d/%d\n", old_start, old_len, new_start, new_len);
+
+  memcpy(change_set->old_tokens, old_tokens->data + old_start, old_len * sizeof(Token));
+  memcpy(change_set->new_tokens, new_tokens->data + new_start, new_len * sizeof(Token));
   
   return TypedData_Wrap_Struct(rb_cChangeSet, &change_set_type, change_set);
 }
@@ -339,15 +344,13 @@ rb_change_set_new(ChangeType change_type, VALUE rb_input,
 }
 
 static void
-output_change_set(VALUE rb_out_ary, ChangeType change_type, VALUE rb_input_old, VALUE rb_input_new,
-                  TokenArray *tokens_old, size_t start_old, size_t len_old,
-                  TokenArray *tokens_new, size_t start_new, size_t len_new, bool split_lines) {
+output_change_set(DiffContext *ctx, ChangeType change_type, size_t start_old, size_t len_old, size_t start_new, size_t len_new) {
 
   //FIXME: splitting modification is tricky...                    
-  if(change_type == CHANGE_TYPE_MOD || change_type == CHANGE_TYPE_EQL || !split_lines) {
-    rb_ary_push(rb_out_ary, rb_change_set_new_full(change_type, rb_input_old, rb_input_new,
-                                                    tokens_old, start_old, len_old,
-                                                    tokens_new, start_new, len_new));
+  if(change_type == CHANGE_TYPE_MOD || change_type == CHANGE_TYPE_EQL || !ctx->split_lines) {
+    rb_ary_push(ctx->rb_out_ary, rb_change_set_new_full(change_type, ctx->rb_old, ctx->rb_new,
+                                                        &ctx->tokens_old, start_old, len_old,
+                                                        &ctx->tokens_new, start_new, len_new));
   } else {
     size_t start, len;
     TokenArray *tokens;
@@ -356,15 +359,15 @@ output_change_set(VALUE rb_out_ary, ChangeType change_type, VALUE rb_input_old, 
       case CHANGE_TYPE_ADD: {
         start = start_new;
         len = len_new;
-        tokens = tokens_new;
-        rb_input = rb_input_new;
+        tokens = &ctx->tokens_new;
+        rb_input = ctx->rb_new;
         break;
       }
       case CHANGE_TYPE_DEL: {
         start = start_old;
         len = len_old;
-        tokens = tokens_old;
-        rb_input = rb_input_old;
+        tokens = &ctx->tokens_old;
+        rb_input = ctx->rb_old;
         break;
       }
       default: {
@@ -375,28 +378,43 @@ output_change_set(VALUE rb_out_ary, ChangeType change_type, VALUE rb_input_old, 
     size_t end = start + len;
     size_t next_start = start;
 
-    for(size_t i = start; i < end; i++) {
-      Token *token = &tokens->data[i];
-      if(token->before_newline) {
-        rb_ary_push(rb_out_ary, rb_change_set_new(change_type, rb_input, tokens, next_start, i - next_start + 1));
-        next_start = i + 1;
-      }
-    }
+    // for(size_t i = start; i < end; i++) {
+    //   Token *token = &tokens->data[i];
+    //   if(token->before_newline) {
+    //     rb_ary_push(rb_out_ary, rb_change_set_new(change_type, rb_input, tokens, next_start, i - next_start + 1));
+    //     next_start = i + 1;
+    //   }
+    // }
 
     if(next_start < end) {
-      rb_ary_push(rb_out_ary, rb_change_set_new(change_type, rb_input, tokens, next_start, end - next_start));
+      rb_ary_push(ctx->rb_out_ary, rb_change_set_new(change_type, rb_input, tokens, next_start, end - next_start));
     }
   }
 }
 
 
+static void
+index_old(DiffContext *ctx, uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new) {
+  for(size_t iold = start_old; iold < start_old + len_old; iold++) {
+    Token *token = &ctx->tokens_old.data[iold];
+
+    IndexKey *key = &ctx->table_entries_old[iold];
+    key->start_byte = token->start_byte;
+    key->end_byte = token->end_byte;
+    key->input = ctx->input_old;
+
+    UpdateArg arg = {
+      .index_list = &ctx->index_list,
+      .value = iold,
+    };
+
+    st_update(ctx->old_index_map, (st_data_t) key, update_callback, (st_data_t) &arg);
+  }
+}
 
 // Loosely based on https://github.com/paulgb/simplediff
 static void
-token_diff(TokenArray *tokens_old, TokenArray *tokens_new, IndexValue *index_list, IndexKey *table_entries_old, IntIntMap *overlap,
-          IntIntMap *_overlap, st_table *old_index_map, VALUE rb_old, VALUE rb_new, const char *input_old, const char *input_new,
-          uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new, VALUE rb_out_ary,
-          bool output_eq, bool split_lines) {
+token_diff(DiffContext *ctx, uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new) {
 
   if(len_old == 0 && len_new == 0) return;
 
@@ -404,25 +422,19 @@ token_diff(TokenArray *tokens_old, TokenArray *tokens_new, IndexValue *index_lis
   uint32_t sub_start_new = start_new;
   uint32_t sub_length = 0;
 
-  for(size_t iold = start_old; iold < start_old + len_old; iold++) {
-    Token *token = &tokens_old->data[iold];
+  index_old(ctx, start_old, len_old, start_new, len_new);
 
-    IndexKey *key = &table_entries_old[iold];
-    key->start_byte = token->start_byte;
-    key->end_byte = token->end_byte;
-    key->input = input_old;
+  // for(size_t i = 0; i < ctx->tokens_new.len; i++) {
+  //   Token *token = &ctx->tokens_new.data[i];
+  //   fprintf(stderr, "TOKEN NEW (%d): %.*s\n", token->implicit, token->end_byte - token->start_byte, ctx->input_new + token->start_byte);
+  //   if(token->before_newline) {
+  //     fprintf(stderr, "BEFORE NEWLINE\n");
+  //   }
+  // }
 
-    UpdateArg arg = {
-      .index_list = index_list,
-      .value = iold,
-    };
-
-    st_update(old_index_map, (st_data_t) key, update_callback, (st_data_t) &arg);
-  }
-
-  // for(size_t i = 0; i < tokens_new->len; i++) {
-  //   Token *token = &tokens_new->data[i];
-  //   fprintf(stderr, "TOKEN OLD: %.*s\n", token->end_byte - token->start_byte, input_new + token->start_byte);
+  // for(size_t i = 0; i < ctx->tokens_old.len; i++) {
+  //   Token *token = &ctx->tokens_old.data[i];
+  //   fprintf(stderr, "TOKEN OLD (%d): %.*s\n", token->implicit, token->end_byte - token->start_byte, ctx->input_old + token->start_byte);
   //   if(token->before_newline) {
   //     fprintf(stderr, "BEFORE NEWLINE\n");
   //   }
@@ -430,7 +442,7 @@ token_diff(TokenArray *tokens_old, TokenArray *tokens_new, IndexValue *index_lis
 
   if(len_old > 0) {
     for(size_t inew = start_new; inew < start_new + len_new; inew++) {
-      Token *token = &tokens_new->data[inew];
+      Token *token = &ctx->tokens_new.data[inew];
 
     //  fprintf(stderr, "TOKEN NEW: %.*s %d\n", token->end_byte - token->start_byte, input_new + token->start_byte, inew);
     //   if(token->before_newline) {
@@ -443,12 +455,12 @@ token_diff(TokenArray *tokens_old, TokenArray *tokens_new, IndexValue *index_lis
       IndexKey key = {
         .start_byte = token->start_byte,
         .end_byte = token->end_byte,
-        .input = input_new
+        .input = ctx->input_new
       };
 
       st_data_t pair;
 
-      if(st_lookup(old_index_map, (st_data_t)&key, &pair)) {
+      if(st_lookup(ctx->old_index_map, (st_data_t)&key, &pair)) {
         while(true) {
           uint32_t value = PAIR64_FIRST(pair);
           uint32_t next_index = PAIR64_SECOND(pair);
@@ -458,7 +470,7 @@ token_diff(TokenArray *tokens_old, TokenArray *tokens_new, IndexValue *index_lis
           uint32_t prev_sub_len = 0;
 
           if(iold > start_old) {
-            prev_sub_len = overlap->data[iold - 1];
+            prev_sub_len = ctx->overlap.data[iold - 1];
             // st_lookup(overlap, (st_data_t) (iold - 1), (st_data_t *) &prev_sub_len);
           }
 
@@ -467,20 +479,19 @@ token_diff(TokenArray *tokens_old, TokenArray *tokens_new, IndexValue *index_lis
             uint32_t new_sub_start_old = iold - new_sub_len + 1;
             uint32_t new_sub_start_new = inew - new_sub_len + 1;
 
-            bool new_sub_ends_at_newline = false;
-            bool cur_sub_ends_at_newline = false;
+            // bool new_sub_ends_at_newline = false;
+            // bool cur_sub_ends_at_newline = false;
 
-            if(sub_length > 0) {
-              int64_t cur_sub_last_token_index = sub_start_new + sub_length - 1;
-              int64_t new_sub_last_token_index = new_sub_start_new + new_sub_len - 1;
+            // if(sub_length > 0) {
+            //   int64_t cur_sub_last_token_index = sub_start_new + sub_length - 1;
+            //   int64_t new_sub_last_token_index = new_sub_start_new + new_sub_len - 1;
 
-              new_sub_ends_at_newline = new_sub_last_token_index > 0 && tokens_new->data[new_sub_last_token_index].before_newline;
-              cur_sub_ends_at_newline = cur_sub_last_token_index > 0 && tokens_new->data[cur_sub_last_token_index].before_newline;
-            }
+            //   new_sub_ends_at_newline = new_sub_last_token_index > 0 && tokens_new->data[new_sub_last_token_index].before_newline;
+            //   cur_sub_ends_at_newline = cur_sub_last_token_index > 0 && tokens_new->data[cur_sub_last_token_index].before_newline;
+            // }
 
 
-            if(new_sub_len > sub_length ||
-               (new_sub_len == sub_length && !cur_sub_ends_at_newline && new_sub_ends_at_newline)) {
+            if(new_sub_len > sub_length) { // || (new_sub_len == sub_length && !cur_sub_ends_at_newline && new_sub_ends_at_newline)) {
 
                 // if(new_sub_len == sub_length && (new_sub_ends_at_newline || !cur_sub_ends_at_newline)) {
                 //   fprintf(stderr, "HAVE FOUND NEWLINE TOKEN\n");
@@ -501,23 +512,23 @@ token_diff(TokenArray *tokens_old, TokenArray *tokens_new, IndexValue *index_lis
             assert(sub_start_old >= start_old);
             assert(sub_start_new >= start_new);
             // st_insert(_overlap, (st_data_t) iold, new_sub_len);
-            int_int_map_insert(_overlap, iold, new_sub_len);
+            int_int_map_insert(&ctx->_overlap, iold, new_sub_len);
           }
 
           if(next_index == UINT32_MAX) {
             break;
           } else {
-            pair = index_list->entries[next_index];
+            pair = ctx->index_list.entries[next_index];
           }
         }
       }
 
       {
-        IntIntMap *tmp = overlap;
-        overlap = _overlap;
-        _overlap = tmp;
+        IntIntMap tmp = ctx->overlap;
+        ctx->overlap = ctx->_overlap;
+        ctx->_overlap = tmp;
 
-        int_int_map_reset(_overlap);
+        int_int_map_reset(&ctx->_overlap);
         // st_clear(_overlap);
       }
     }
@@ -526,10 +537,9 @@ token_diff(TokenArray *tokens_old, TokenArray *tokens_new, IndexValue *index_lis
   if(sub_length == 0) {
     size_t common_len = MIN(len_old, len_new);
     if(common_len > 0) {
-      output_change_set(rb_out_ary, CHANGE_TYPE_MOD, rb_old, rb_new,
-                        tokens_old, start_old, common_len,
-                        tokens_new, start_new, common_len,
-                        split_lines);
+      output_change_set(ctx, CHANGE_TYPE_MOD,
+                        start_old, common_len,
+                        start_new, common_len);
 
       // rb_ary_push(rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_MOD, rb_input_old, rb_input_new,
       //                                                tokens_old, start_old, common_len,
@@ -542,46 +552,39 @@ token_diff(TokenArray *tokens_old, TokenArray *tokens_new, IndexValue *index_lis
 
     if(len_old > 0) {
       // rb_ary_push(rb_out_ary, rb_change_set_new(CHANGE_TYPE_DEL, rb_input_old, tokens_old, start_old, len_old));
-      output_change_set(rb_out_ary, CHANGE_TYPE_DEL, rb_old, Qnil,
-                        tokens_old, start_old, len_old,
-                        NULL, 0, 0,
-                        split_lines);
+      output_change_set(ctx, CHANGE_TYPE_DEL,
+                        start_old, len_old,
+                        0, 0);
     }
 
     if(len_new > 0) {
       // rb_ary_push(rb_out_ary, rb_change_set_new(CHANGE_TYPE_ADD, rb_input_new, tokens_new, start_new, len_new));
-      output_change_set(rb_out_ary, CHANGE_TYPE_ADD, Qnil, rb_new,
-                        NULL, 0, 0,
-                        tokens_new, start_new, len_new,
-                        split_lines);
+      output_change_set(ctx, CHANGE_TYPE_ADD,
+                        0, 0,
+                        start_new, len_new);
                         
     }
   } else {
     // st_clear(_overlap);
     // st_clear(overlap);
-    int_int_map_reset(_overlap);
-    int_int_map_reset(overlap);
+    int_int_map_reset(&ctx->_overlap);
+    int_int_map_reset(&ctx->overlap);
 
-    st_clear(old_index_map);
-    index_list->len = 0;
+    st_clear(ctx->old_index_map);
+    ctx->index_list.len = 0;
 
     assert(sub_length <= len_old);
     assert(sub_length <= len_new);
     assert(sub_start_old >= start_old);
     assert(sub_start_new >= start_new);
 
-    token_diff(tokens_old, tokens_new, index_list, table_entries_old, overlap, _overlap, old_index_map,
-              rb_old, rb_new, input_old, input_new,
-              start_old, sub_start_old - start_old,
-              start_new, sub_start_new - start_new,
-              rb_out_ary, output_eq, split_lines);
+    token_diff(ctx, start_old, sub_start_old - start_old,
+              start_new, sub_start_new - start_new);
 
-
-    if(output_eq) {
-      output_change_set(rb_out_ary, CHANGE_TYPE_EQL, rb_old, rb_new,
-                        tokens_old, sub_start_old, sub_length,
-                        tokens_new, sub_start_new, sub_length,
-                        split_lines);
+    if(ctx->output_eq) {
+      output_change_set(ctx, CHANGE_TYPE_EQL,
+                        sub_start_old, sub_length,
+                        sub_start_new, sub_length);
       // rb_ary_push(rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_EQL, rb_input_old, rb_input_new,
       //                                                tokens_old, sub_start_old, sub_length,
       //                                                tokens_new, sub_start_new, sub_length));
@@ -589,17 +592,14 @@ token_diff(TokenArray *tokens_old, TokenArray *tokens_new, IndexValue *index_lis
 
     // st_clear(_overlap);
     // st_clear(overlap);
-    int_int_map_reset(_overlap);
-    int_int_map_reset(overlap);
-    st_clear(old_index_map);
-    index_list->len = 0;
+    int_int_map_reset(&ctx->_overlap);
+    int_int_map_reset(&ctx->overlap);
+    st_clear(ctx->old_index_map);
+    ctx->index_list.len = 0;
 
-    token_diff(tokens_old, tokens_new, index_list, table_entries_old, overlap, _overlap, old_index_map, 
-              rb_old, rb_new, input_old, input_new,
+    token_diff(ctx, 
               sub_start_old + sub_length, (start_old + len_old) - (sub_start_old + sub_length),
-              sub_start_new + sub_length, (start_new + len_new) - (sub_start_new + sub_length),
-              rb_out_ary, output_eq, split_lines);
-
+              sub_start_new + sub_length, (start_new + len_new) - (sub_start_new + sub_length));
   }
 }
 
@@ -611,17 +611,22 @@ rb_change_set_get(ChangeSet *change_set, long index, VALUE *rb_old_token, VALUE 
   switch(change_set->change_type) {
     case CHANGE_TYPE_EQL:
     case CHANGE_TYPE_MOD:
-      *rb_old_token = rb_new_token_from_ptr(&change_set->tokens[index]);
-      *rb_new_token = rb_new_token_from_ptr(&change_set->tokens[change_set->len + index]);
+      *rb_old_token = rb_new_token_from_ptr(&change_set->old_tokens[index]);
+      *rb_new_token = rb_new_token_from_ptr(&change_set->new_tokens[index]);
       break;
     case CHANGE_TYPE_DEL:
-      *rb_old_token = rb_new_token_from_ptr(&change_set->tokens[index]);
+      *rb_old_token = rb_new_token_from_ptr(&change_set->old_tokens[index]);
       break;
     case CHANGE_TYPE_ADD:
-      *rb_new_token = rb_new_token_from_ptr(&change_set->tokens[index]);
+      *rb_new_token = rb_new_token_from_ptr(&change_set->new_tokens[index]);
       break;
   }
 }
+
+static uint32_t change_set_len(ChangeSet *change_set) {
+  return MAX(change_set->old_len, change_set->new_len);
+}
+
 
 static VALUE
 rb_change_set_aref(VALUE self, VALUE rb_index) {
@@ -629,11 +634,13 @@ rb_change_set_aref(VALUE self, VALUE rb_index) {
   TypedData_Get_Struct(self, ChangeSet, &change_set_type, change_set);
 
   long index = FIX2LONG(rb_index);
+  uint32_t len = change_set_len(change_set);
+
   if(index < 0) {
-    index = change_set->len + index;
+    index = len + index;
   }
-  if(index < 0 || index >= change_set->len) {
-    rb_raise(rb_eIndexError, "index %ld outside bounds: %d...%u", index, 0,  (unsigned) change_set->len);
+  if(index < 0 || index >= len) {
+    rb_raise(rb_eIndexError, "index %ld outside bounds: %d...%u", index, 0,  (unsigned) len);
     return Qnil;
   }
 
@@ -655,7 +662,8 @@ rb_change_set_size(VALUE self) {
   ChangeSet *change_set;
   TypedData_Get_Struct(self, ChangeSet, &change_set_type, change_set);
 
-  return LONG2FIX((long) change_set->len);
+  uint32_t len = change_set_len(change_set);
+  return LONG2FIX((long) len);
 }
 
 static VALUE
@@ -693,8 +701,10 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
   // Check_Type(rb_old, T_STRING);
   // Check_Type(rb_new, T_STRING);
 
-  bool output_eq = RB_TEST(rb_output_eq);
-  bool split_lines = false; //RB_TEST(rb_split_lines);
+  DiffContext ctx;
+
+  ctx.output_eq = RB_TEST(rb_output_eq);
+  ctx.split_lines = false; //RB_TEST(rb_split_lines);
   bool ignore_whitespace = RB_TEST(rb_ignore_whitespace);
   bool ignore_comments = RB_TEST(rb_ignore_comments);
 
@@ -702,27 +712,26 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
   uint32_t input_new_start;
   uint32_t input_old_len;
   uint32_t input_new_len;
-  const char *input_old = rb_node_input_(rb_old, &input_old_start, &input_old_len);
-  const char *input_new = rb_node_input_(rb_new, &input_new_start, &input_new_len);
 
-  VALUE rb_out_ary = rb_ary_new();
+  ctx.input_old = rb_node_input_(rb_old, &input_old_start, &input_old_len);
+  ctx.input_new = rb_node_input_(rb_new, &input_new_start, &input_new_len);
+  ctx.rb_out_ary = rb_ary_new();
 
-  if(input_old_len == input_new_len && !memcmp(input_old + input_old_start, input_new + input_new_start, input_new_len)) {
-    return rb_out_ary;
+  if(input_old_len == input_new_len && !memcmp(ctx.input_old + input_old_start, ctx.input_new + input_new_start, input_new_len)) {
+    return ctx.rb_out_ary;
   }
 
-  TokenArray tokens_old = rb_node_tokenize_(rb_old, ignore_whitespace, ignore_comments);
-  TokenArray tokens_new = rb_node_tokenize_(rb_new, ignore_whitespace, ignore_comments);
+  ctx.tokens_old = rb_node_tokenize_(rb_old, ignore_whitespace, ignore_comments);
+  ctx.tokens_new = rb_node_tokenize_(rb_new, ignore_whitespace, ignore_comments);
 
-  ssize_t tokens_old_len = (ssize_t) tokens_old.len;
-  ssize_t tokens_new_len = (ssize_t) tokens_new.len;
+  ssize_t tokens_old_len = (ssize_t) ctx.tokens_old.len;
+  ssize_t tokens_new_len = (ssize_t) ctx.tokens_new.len;
 
-  IndexKey *table_entries_old = RB_ALLOC_N(IndexKey, tokens_old_len);
+  ctx.table_entries_old = RB_ALLOC_N(IndexKey, tokens_old_len);
 
-  IndexValue index_list;
-  index_list.capa = tokens_old.len;
-  index_list.len = 0;
-  index_list.entries = RB_ALLOC_N(st_data_t, index_list.capa);
+  ctx.index_list.capa = ctx.tokens_old.len;
+  ctx.index_list.len = 0;
+  ctx.index_list.entries = RB_ALLOC_N(st_data_t, ctx.index_list.capa);
 
   // for(size_t i = 0; i < tokens_new_len; i++) {
   //   Token *token = &tokens_new[i];
@@ -732,29 +741,27 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
   //   }
   // }
 
-  IntIntMap overlap;
-  IntIntMap _overlap;
 
-  int_int_map_init(&overlap, tokens_old.len);
-  int_int_map_init(&_overlap, tokens_old.len);
+  int_int_map_init(&ctx.overlap, ctx.tokens_old.len);
+  int_int_map_init(&ctx._overlap, ctx.tokens_old.len);
 
-  st_table *old_index_map = st_init_table(&type_index_key_hash);
+  ctx.old_index_map = st_init_table(&type_index_key_hash);
 
   ssize_t prefix_len = 0;
-  ssize_t tokens_min_len = MIN(tokens_old.len, tokens_new.len);
+  ssize_t tokens_min_len = MIN(ctx.tokens_old.len, ctx.tokens_new.len);
   for(ssize_t i = 0; i < tokens_min_len; i++) {
-    Token *old_token = &tokens_old.data[i];
-    Token *new_token = &tokens_new.data[i];
+    Token *old_token = &ctx.tokens_old.data[i];
+    Token *new_token = &ctx.tokens_new.data[i];
 
     assert(old_token->end_byte <= input_old_start + input_old_len);
     assert(new_token->end_byte <= input_new_start + input_new_len);
 
-    if(!token_eql(old_token, input_old, new_token, input_new)) break;
+    if(!token_eql(old_token, ctx.input_old, new_token, ctx.input_new)) break;
 
 
-    if(old_token->before_newline && new_token->before_newline) {
+    //if(old_token->before_newline && new_token->before_newline) {
       prefix_len = MIN(tokens_min_len, i + 1);
-    }
+    //}
   }
 
   if(prefix_len == tokens_old_len && prefix_len == tokens_new_len) {
@@ -766,14 +773,14 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
   for(ssize_t i = 0; tokens_old_len - i > prefix_len && tokens_new_len - i > prefix_len; i++) {
     // assert(tokens_old[i - 1].end_byte <= input_old_len);
     // assert(tokens_new[i - 1].end_byte <= input_new_len);
-    Token *old_token = &tokens_old.data[tokens_old_len - i - 1];
-    Token *new_token = &tokens_new.data[tokens_new_len - i - 1];
+    Token *old_token = &ctx.tokens_old.data[tokens_old_len - i - 1];
+    Token *new_token = &ctx.tokens_new.data[tokens_new_len - i - 1];
 
-    if(old_token->before_newline && new_token->before_newline) {
+    //if(old_token->before_newline && new_token->before_newline) {
       suffix_len = i;
-    }
+    //}
 
-    if(!token_eql(old_token, input_old, new_token, input_new)) break;
+    if(!token_eql(old_token, ctx.input_old, new_token, ctx.input_new)) break;
 
   }
 
@@ -791,9 +798,9 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
 
   assert(suffix_len + prefix_len < MAX(tokens_old_len, tokens_new_len));
 
-  token_diff(&tokens_old, &tokens_new, &index_list, table_entries_old, &overlap, &_overlap, old_index_map,
-            rb_old, rb_new, input_old, input_new, prefix_len, tokens_old.len - suffix_len - prefix_len,
-            prefix_len, tokens_new.len - suffix_len - prefix_len, rb_out_ary, output_eq, split_lines);
+  token_diff(&ctx,
+            prefix_len, ctx.tokens_old.len - suffix_len - prefix_len,
+            prefix_len, ctx.tokens_new.len - suffix_len - prefix_len);
 
   // token_diff(tokens_old, tokens_new, &index_list, table_entries_old, overlap, _overlap, old_index_map,
   //           rb_old, rb_new, 0, tokens_old_len, 0, tokens_new_len, rb_out_ary, output_eq);
@@ -801,15 +808,15 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
 done:
   // st_free_table(overlap);
   // st_free_table(_overlap);
-  int_int_map_destroy(&overlap);
-  int_int_map_destroy(&_overlap);
-  st_free_table(old_index_map);
-  xfree(table_entries_old);
-  xfree(index_list.entries);
-  xfree(tokens_old.data);
-  xfree(tokens_new.data);
+  int_int_map_destroy(&ctx.overlap);
+  int_int_map_destroy(&ctx._overlap);
+  st_free_table(ctx.old_index_map);
+  xfree(ctx.table_entries_old);
+  xfree(ctx.index_list.entries);
+  xfree(ctx.tokens_old.data);
+  xfree(ctx.tokens_new.data);
 
-  return rb_out_ary;
+  return ctx.rb_out_ary;
 }
 
 static VALUE
@@ -817,7 +824,8 @@ change_set_enum_length(VALUE rb_change_set, VALUE args, VALUE eobj)
 {
   ChangeSet *change_set;
   TypedData_Get_Struct(rb_change_set, ChangeSet, &change_set_type, change_set);
-  return UINT2NUM(change_set->len);
+  uint32_t len = change_set_len(change_set);
+  return UINT2NUM(len);
 }
 
 static VALUE
@@ -827,7 +835,8 @@ rb_change_set_each(VALUE self)
   TypedData_Get_Struct(self, ChangeSet, &change_set_type, change_set);
   RETURN_SIZED_ENUMERATOR(self, 0, 0, change_set_enum_length);
 
-  for(uint32_t i = 0; i < change_set->len; i++) {
+  uint32_t len = change_set_len(change_set);
+  for(uint32_t i = 0; i < len; i++) {
     VALUE rb_old_token;
     VALUE rb_new_token;
     rb_change_set_get(change_set, i, &rb_old_token, &rb_new_token);
@@ -842,8 +851,9 @@ rb_change_set_old(VALUE self)
   ChangeSet *change_set;
   TypedData_Get_Struct(self, ChangeSet, &change_set_type, change_set);
 
-  VALUE rb_ary = rb_ary_new_capa(change_set->len);
-  for(uint32_t i = 0; i < change_set->len; i++) {
+  uint32_t len = change_set_len(change_set);
+  VALUE rb_ary = rb_ary_new_capa(len);
+  for(uint32_t i = 0; i < len; i++) {
     VALUE rb_old_token;
     VALUE rb_new_token_;
     rb_change_set_get(change_set, i, &rb_old_token, &rb_new_token_);
@@ -858,8 +868,9 @@ rb_change_set_new_m(VALUE self)
   ChangeSet *change_set;
   TypedData_Get_Struct(self, ChangeSet, &change_set_type, change_set);
 
-  VALUE rb_ary = rb_ary_new_capa(change_set->len);
-  for(uint32_t i = 0; i < change_set->len; i++) {
+  uint32_t len = change_set_len(change_set);
+  VALUE rb_ary = rb_ary_new_capa(len);
+  for(uint32_t i = 0; i < len; i++) {
     VALUE rb_old_token_;
     VALUE rb_new_token;
     rb_change_set_get(change_set, i, &rb_old_token_, &rb_new_token);
