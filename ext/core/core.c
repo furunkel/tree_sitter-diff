@@ -128,6 +128,18 @@ typedef struct {
   uint32_t cols;
 } Matrix;
 
+typedef enum {
+  CALLBACK_START,
+  CALLBACK_FINISH,
+  CALLBACK_EQ,
+  CALLBACK_INS,
+  CALLBACK_DEL,
+} CallbackType;
+
+struct DiffContext;
+
+typedef void (*Callback)(struct DiffContext *ctx, CallbackType type, Token *token_old, Token *token_new);
+
 typedef struct {
   TokenArray tokens_old;
   TokenArray tokens_new;
@@ -144,6 +156,7 @@ typedef struct {
   bool output_eq;
   bool split_lines;
   Matrix matrix;
+  Callback cb;
 } DiffContext;
 
 static void change_set_free(void *ptr)
@@ -318,27 +331,27 @@ update_callback(st_data_t *key, st_data_t *value, st_data_t arg, int existing) {
   return ST_CONTINUE;
 }
 
-static inline uint32_t
-matrix_get(Matrix *matrix, uint32_t row, uint32_t col) {
-  return matrix->data[row * matrix->cols + col];
-}
+// static inline uint32_t
+// matrix_get(Matrix *matrix, uint32_t row, uint32_t col) {
+//   return matrix->data[row * matrix->cols + col];
+// }
 
-static void uint32_t
-matrix_set(Matrix *matrix, uint32_t row, uint32_t col, uint32_t val) {
-  matrix->data[row * matrix->cols + col] = val;
-}
+// static void uint32_t
+// matrix_set(Matrix *matrix, uint32_t row, uint32_t col, uint32_t val) {
+//   matrix->data[row * matrix->cols + col] = val;
+// }
 
-static void
-matrix_init(Matrix *matrix, uint32_t rows, uint32_t cols) {
-  matrix->rows = rows;
-  matrix->cols = cols;
-  matrix->data = RB_ALLOC_N(uint32_t, rows * cols);
-}
+// static void
+// matrix_init(Matrix *matrix, uint32_t rows, uint32_t cols) {
+//   matrix->rows = rows;
+//   matrix->cols = cols;
+//   matrix->data = RB_ALLOC_N(uint32_t, rows * cols);
+// }
 
-static void
-matrix_destroy(Matrix *matrix) {
-  xfree(matrix->data);
-}
+// static void
+// matrix_destroy(Matrix *matrix) {
+//   xfree(matrix->data);
+// }
 
 static void
 match_map_init(MatchMap *map, uint32_t len) {
@@ -547,54 +560,54 @@ change_set_from_tree(DiffContext *ctx, uint32_t root_idx, VALUE rb_ary) {
   change_set_from_tree(ctx, tree->children[1], rb_ary);
 }
 
-static void
-output_change_set(DiffContext *ctx, ChangeType change_type, size_t start_old, size_t len_old, size_t start_new, size_t len_new) {
+// static void
+// output_change_set(DiffContext *ctx, ChangeType change_type, size_t start_old, size_t len_old, size_t start_new, size_t len_new) {
 
-  //FIXME: splitting modification is tricky...                    
-  if(change_type == CHANGE_TYPE_MOD || change_type == CHANGE_TYPE_EQL || !ctx->split_lines) {
-    rb_ary_push(ctx->rb_out_ary, rb_change_set_new_full(change_type, ctx->rb_old, ctx->rb_new,
-                                                        &ctx->tokens_old, start_old, len_old,
-                                                        &ctx->tokens_new, start_new, len_new));
-  } else {
-    size_t start, len;
-    TokenArray *tokens;
-    VALUE rb_input;
-    switch(change_type) {
-      case CHANGE_TYPE_ADD: {
-        start = start_new;
-        len = len_new;
-        tokens = &ctx->tokens_new;
-        rb_input = ctx->rb_new;
-        break;
-      }
-      case CHANGE_TYPE_DEL: {
-        start = start_old;
-        len = len_old;
-        tokens = &ctx->tokens_old;
-        rb_input = ctx->rb_old;
-        break;
-      }
-      default: {
-        rb_raise(rb_eRuntimeError, "unexpected change type");
-      }
-    }
+//   //FIXME: splitting modification is tricky...                    
+//   if(change_type == CHANGE_TYPE_MOD || change_type == CHANGE_TYPE_EQL || !ctx->split_lines) {
+//     rb_ary_push(ctx->rb_out_ary, rb_change_set_new_full(change_type, ctx->rb_old, ctx->rb_new,
+//                                                         &ctx->tokens_old, start_old, len_old,
+//                                                         &ctx->tokens_new, start_new, len_new));
+//   } else {
+//     size_t start, len;
+//     TokenArray *tokens;
+//     VALUE rb_input;
+//     switch(change_type) {
+//       case CHANGE_TYPE_ADD: {
+//         start = start_new;
+//         len = len_new;
+//         tokens = &ctx->tokens_new;
+//         rb_input = ctx->rb_new;
+//         break;
+//       }
+//       case CHANGE_TYPE_DEL: {
+//         start = start_old;
+//         len = len_old;
+//         tokens = &ctx->tokens_old;
+//         rb_input = ctx->rb_old;
+//         break;
+//       }
+//       default: {
+//         rb_raise(rb_eRuntimeError, "unexpected change type");
+//       }
+//     }
 
-    size_t end = start + len;
-    size_t next_start = start;
+//     size_t end = start + len;
+//     size_t next_start = start;
 
-    // for(size_t i = start; i < end; i++) {
-    //   Token *token = &tokens->data[i];
-    //   if(token->before_newline) {
-    //     rb_ary_push(rb_out_ary, rb_change_set_new(change_type, rb_input, tokens, next_start, i - next_start + 1));
-    //     next_start = i + 1;
-    //   }
-    // }
+//     // for(size_t i = start; i < end; i++) {
+//     //   Token *token = &tokens->data[i];
+//     //   if(token->before_newline) {
+//     //     rb_ary_push(rb_out_ary, rb_change_set_new(change_type, rb_input, tokens, next_start, i - next_start + 1));
+//     //     next_start = i + 1;
+//     //   }
+//     // }
 
-    if(next_start < end) {
-      rb_ary_push(ctx->rb_out_ary, rb_change_set_new(change_type, rb_input, tokens, next_start, end - next_start));
-    }
-  }
-}
+//     if(next_start < end) {
+//       rb_ary_push(ctx->rb_out_ary, rb_change_set_new(change_type, rb_input, tokens, next_start, end - next_start));
+//     }
+//   }
+// }
 
 
 static void
@@ -619,61 +632,255 @@ index_old(DiffContext *ctx, uint32_t start_old, uint32_t len_old, uint32_t start
   }
 }
 
-// static void
-// token_diff2(DiffContext *ctx, uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new) {
+typedef struct {
+  int64_t left;
+  int64_t right;
+  int64_t top;
+  int64_t bottom;
+} Box;
 
-//   uint32_t i = len_old;
-//   uint32_t j = len_new;
-
-//   Matrix *matrix = &ctx->matrix;
-//   Token *old_tokens = &ctx->tokens_old.data[start_old];
-//   Token *new_tokens = &ctx->tokens_new.data[start_new];
-
-//   for(uint32_t i = 0; i < matrix->rows; i++) {
-//     for(uint32_t j = 0; j < matrix->cols; j++) {
-//       if(i == 0 || j == 0) {
-//         matrix_set(matrix, i, j, 0);
-//       } else if(token_eql(old_tokens[i - 1], ctx->input_old, new_tokens[j - 1], ctx->input_new)) {
-//         matrix_set(matrix, i, j, 1 + matrix_get(matrix, i - 1, j - 1));
-//       } else {
-//         matrix_set(matrix, i, j, MAX(matrix_get(matrix, i - 1, j), matrix_get(i, j - 1)));
-//       }
-//     }
-//   }
-
-//   while(true) {
-//     if(i == 0) {
-//       output_change_set(ctx, CHANGE_TYPE_ADD, 0, 0, start_new, j);
-//       break;
-//     } else if(j == 0) {
-//       output_change_set(ctx, CHANGE_TYPE_DEL, start_old, i, 0, 0);
-//       break;
-//     } else if(token_eql(old_tokens[i - 1], new_tokens[j - 1])) {
-//       uint32_t next_i = i - 1;
-//       uint32_t next_j = j - 1;
-
-//       do {
-                
-//       }
+typedef struct {
+  int64_t x1;
+  int64_t y1;
+  int64_t x2;
+  int64_t y2;
+} Snake;
 
 
-//       if(ctx->output_eq) {
-//         output_change_set(ctx, CHANGE_TYPE_EQL,
-//                                sub_start_old, sub_length,
-//                                sub_start_new, sub_length);
-//       }
-//       // i -= 1;
-//       // j -= 1;
-//       i = next_i;
-//       j = next_j;
-//     } else {
+#define BOX_WIDTH(b) (b->right - b->left)
+#define BOX_HEIGHT(b) (b->bottom - b->top)
+#define BOX_SIZE(b) (BOX_WIDTH(b) + BOX_HEIGHT(b))
+#define BOX_DELTA(b) (BOX_WIDTH(b) - BOX_HEIGHT(b))
 
-//     }
+#define VGET(v, i) (v[(i) < 0 ? ((i) + (vlen)) : (i)])
+#define VSET(v, i, val) (v[(i) < 0 ? ((i) + (vlen)) : (i)] = val)
 
-//     return list(reversed(results))
+static bool
+forward(DiffContext *ctx, Box *box, int64_t *vf, int64_t *vb, int64_t d, int64_t vlen, Snake *snake) {
+  for(int64_t k = d; k >= -d; k -= 2) {
+    int64_t c = k - BOX_DELTA(box);
+    int64_t px, x, y, py;
+
+    if(k == -d || (k != d && VGET(vf, k - 1) < VGET(vf, k + 1))) {
+      px = x = VGET(vf, k + 1);
+    }
+    else {
+      px = VGET(vf, k - 1);
+      x  = px + 1;
+    }
+
+    y = box->top + (x - box->left) - k;
+    py = (d == 0 || x != px) ? y : y - 1;
+
+    while(x < box->right && y < box->bottom && token_eql(&ctx->tokens_old.data[x], ctx->input_old, &ctx->tokens_new.data[y], ctx->input_new)) {
+      x++;
+      y++;
+    }
+
+    VSET(vf, k, x);
+
+    if(BOX_DELTA(box) % 2 != 0 && (c >= -(d - 1) && c <= d - 1) && y >= VGET(vb, c)) {
+      *snake = (Snake){px, py, x, y};
+      return true;
+    }
+  }
+  return false;
+}
 
 
-// }
+static bool
+backward(DiffContext *ctx, Box *box, int64_t *vf, int64_t *vb, int64_t d, int64_t vlen, Snake *snake) {
+  for(int64_t c = d; c >= -d; c -= 2) {
+    int64_t k = c + BOX_DELTA(box);
+    int64_t px, x, y, py;
+
+    if(c == -d || (c != d && VGET(vb, c - 1) > VGET(vb, c + 1))) {
+      py = y = VGET(vb, c + 1);
+    }
+    else {
+      py = VGET(vb, c - 1);
+      y  = py - 1;
+    }
+
+    x = box->left + (y - box->top) + k;
+    px = (d == 0 || y != py) ? x : x + 1;
+
+    while(x > box->left && y > box->top && token_eql(&ctx->tokens_old.data[x - 1], ctx->input_old, &ctx->tokens_new.data[y - 1], ctx->input_new)) {
+      x--;
+      y--;
+    }
+
+    VSET(vb, c, y);
+
+    if(BOX_DELTA(box) % 2 == 0 && (k >= -d && k <= d) && x <= VGET(vf, k)) {
+      *snake = (Snake){x, y, px, py};
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool
+midpoint(DiffContext *ctx, Box *box, Snake *snake) {
+  if(BOX_SIZE(box) == 0) return false;
+
+  int64_t max = (BOX_SIZE(box) + 1) / 2;
+  int64_t vlen = 2 * max + 1;
+  int64_t *vf = RB_ZALLOC_N(int64_t, vlen);
+  int64_t *vb = RB_ZALLOC_N(int64_t, vlen);
+  bool retval = false;
+
+  vf[1] = box->left;
+  vb[1] = box->bottom;
+
+  for(int64_t d = 0; d <= max; d++) {
+    if(forward(ctx, box, vf, vb, d, vlen, snake)) {
+      retval = true;
+      goto done;
+    }
+    if(backward(ctx, box, vf, vb, d, vlen, snake)) {
+      retval = true;
+      goto done;
+    }
+  }
+
+done:
+  xfree(vf);
+  xfree(vb);
+
+  return retval;
+}
+
+typedef struct Path {
+  int64_t x;
+  int64_t y;
+  struct Path *next;
+} Path;
+
+
+static Path *
+find_path(DiffContext *ctx, int64_t left, int64_t top, int64_t right, int64_t bottom) {
+  Box box = {
+    .left = left,
+    .top = top,
+    .right = right,
+    .bottom = bottom
+  };
+  Snake snake;
+  if(!midpoint(ctx, &box, &snake)) {
+    return NULL;
+  } 
+
+  int64_t start_x = snake.x1, start_y = snake.y1, finish_x = snake.x2, finish_y = snake.y2;
+
+  assert(!(start_x == right && start_y == bottom));
+
+  Path *head = find_path(ctx, box.left, box.top, start_x, start_y);
+  Path *tail = find_path(ctx, finish_x, finish_y, box.right, box.bottom);
+
+  if(head == NULL) {
+    head = RB_ZALLOC(Path);
+    head->x = start_x;
+    head->y = start_y;
+  }
+
+  if(tail == NULL) {
+    tail = RB_ZALLOC(Path);
+    tail->x = finish_x;
+    tail->y = finish_y;
+  }
+
+  Path *iter = head;
+  while(iter->next) iter = iter->next;
+  iter->next = tail;
+
+  return head;
+}
+
+static void
+call_cb(DiffContext *ctx, int64_t x1, int64_t y1, int64_t x2, int64_t y2) {
+  CallbackType type;
+  Token *token_old = NULL, *token_new = NULL;
+  if(x1 == x2) {
+    type = CALLBACK_INS;
+    token_new = &ctx->tokens_new.data[y1];
+  } else if(y1 == y2) {
+    type = CALLBACK_DEL;
+    token_old = &ctx->tokens_old.data[x1];
+  } else {
+    type = CALLBACK_EQ;
+    token_old = &ctx->tokens_old.data[x1];
+    token_new = &ctx->tokens_old.data[y1];
+  }
+
+  ctx->cb(ctx, type, token_old, token_new);
+}
+
+static void
+walk_diagonal(DiffContext *ctx, int64_t x1, int64_t y1, int64_t x2, int64_t y2, int64_t *out_x1, int64_t *out_y1) {
+  while(x1 < x2 && y1 < y2 && token_eql(&ctx->tokens_old.data[x1], ctx->input_old, &ctx->tokens_new.data[y1], ctx->input_new)) {
+    call_cb(ctx, x1, y1, x1 + 1, y1 + 1);
+    x1++;
+    y1++;
+  }
+  *out_x1 = x1;
+  *out_y1 = y1;
+}
+
+static void
+free_path(Path *path) {
+  if(path->next != NULL) {
+    free_path(path->next);
+  }
+  xfree(path);
+}
+
+static void 
+walk_snakes(DiffContext *ctx, uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new) {
+  Path *path = find_path(ctx, start_old, start_new, len_old, len_new);
+  if(path == NULL) return;
+
+  int64_t x1, y1, x2, y2;
+  Path *iter = path;
+  while(iter) {
+    x1 = iter->x;
+    y1 = iter->y;
+    iter = iter->next;
+    x2 = iter->x;
+    y2 = iter->y;
+    iter = iter->next;
+
+    walk_diagonal(ctx, x1, y1, x2, y2, &x1, &y1);
+    int64_t d = (x2 - x1) - (y2 - y1);
+    if(d < 0) {
+      call_cb(ctx, x1, y1, x1, y1 + 1);
+      y1++;
+    } else if(d > 0) {
+      call_cb(ctx, x1, y1, x1 + 1, y1);
+      x1++;
+    }
+    walk_diagonal(ctx, x1, y1, x2, y2, &x1, &y1);
+  }
+
+  free_path(path);
+}
+
+static void print_diff(DiffContext *ctx, CallbackType type, Token *old_token, Token *new_token) {
+  if(type == CALLBACK_DEL) {
+    fprintf(stderr, "old_token DEL (%d): %.*s\n", old_token->implicit, old_token->end_byte - old_token->start_byte, ctx->input_new + old_token->start_byte);
+  }
+  if(type == CALLBACK_INS) {
+    fprintf(stderr, "new_token INS (%d): %.*s\n", new_token->implicit, new_token->end_byte - new_token->start_byte, ctx->input_new + new_token->start_byte);
+  }
+}
+
+static void
+token_diff2(DiffContext *ctx, uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new) {
+  ctx->cb = print_diff;
+  ctx->cb(ctx, CALLBACK_START, NULL, NULL);
+  walk_snakes(ctx, start_old, len_old, start_new, len_new);
+  ctx->cb(ctx, CALLBACK_FINISH, NULL, NULL);
+}
 
 
 // Loosely based on https://github.com/paulgb/simplediff
@@ -1198,13 +1405,13 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
 
   assert(suffix_len + prefix_len < MAX(tokens_old_len, tokens_new_len));
 
-  matrix_init(&ctx->matrix, ctx.tokens_old.len - suffix_len - prefix_len + 1, ctx.tokens_new.len - suffix_len - prefix_len + 1);
+  //  token_diff2(&ctx,
+  //                                prefix_len, ctx.tokens_old.len - suffix_len - prefix_len,
+  //                                prefix_len, ctx.tokens_new.len - suffix_len - prefix_len);
 
-  uint32_t tree_idx = token_diff2(&ctx,
-                                 prefix_len, ctx.tokens_old.len - suffix_len - prefix_len,
-                                 prefix_len, ctx.tokens_new.len - suffix_len - prefix_len);
 
-  matrix_destroy(&ctx->matrix);
+   token_diff2(&ctx, 0, ctx.tokens_old.len,
+                     0, ctx.tokens_new.len);
 
   // uint32_t tree_idx = token_diff(&ctx,
   //                                prefix_len, ctx.tokens_old.len - suffix_len - prefix_len,
@@ -1215,7 +1422,7 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
   // token_diff(tokens_old, tokens_new, &index_list, table_entries_old, match_map, _overlap, old_index_map,
   //           rb_old, rb_new, 0, tokens_old_len, 0, tokens_new_len, rb_out_ary, output_eq);
 
-  change_set_from_tree(&ctx, tree_idx, rb_out_ary);
+  // change_set_from_tree(&ctx, tree_idx, rb_out_ary);
 
 
 done:
