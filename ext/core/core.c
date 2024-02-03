@@ -4,6 +4,11 @@
 #include <stddef.h>
 #include <signal.h>
 
+/*
+Implementation based on this blog post:
+https://blog.jcoglan.com/2017/03/22/myers-diff-in-linear-space-theory/
+*/
+
 VALUE rb_mTSDiff;
 VALUE rb_cChangeSet;
 VALUE rb_eTsDiffError;
@@ -836,7 +841,6 @@ midpoint(DiffContext *ctx, Box *box, Snake *snake) {
 
 done:
   xfree(vf_vb);
-
   return retval;
 }
 
