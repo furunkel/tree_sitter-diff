@@ -51,17 +51,17 @@ const char *rb_node_input_(VALUE self, uint32_t *start, uint32_t *len);
 VALUE rb_new_token_from_ptr(Token *orig_token);
 void tree_sitter_token_mark(Token *token);
 
-typedef struct {
-  uint32_t capa;
-  uint32_t len;
-  st_data_t *entries;
-} IndexValue;
+// typedef struct {
+//   uint32_t capa;
+//   uint32_t len;
+//   st_data_t *entries;
+// } IndexValue;
 
-typedef struct {
-  uint32_t start_byte;
-  uint32_t end_byte;
-  const char *input;
-} IndexKey;
+// typedef struct {
+//   uint32_t start_byte;
+//   uint32_t end_byte;
+//   const char *input;
+// } IndexKey;
 
 typedef struct {
   VALUE rb_old;
@@ -80,53 +80,51 @@ typedef enum {
   CHANGE_TYPE_MOD,
 } ChangeType;
 
-typedef struct {
-  uint32_t len;
-} Match;
+// typedef struct {
+//   uint32_t len;
+// } Match;
+
+// typedef struct {
+//   Match *data;
+//   uint32_t min_index;
+//   uint32_t max_index;
+// } MatchMap;
+
+// typedef struct {
+//   uint32_t sub_start_old;
+//   uint32_t sub_start_new;
+//   uint32_t sub_len;
+// } BetterMatch;
+
+// #define BETTER_MATCH_ARRAY_INLINE_CAPA 6
+
+// typedef struct {
+//   BetterMatch *data;
+//   BetterMatch inline_data[BETTER_MATCH_ARRAY_INLINE_CAPA];
+//   uint32_t len;
+//   uint32_t capa;
+//   uint32_t max;
+// } BetterMatchArray;
+
+typedef struct Path {
+  int64_t x;
+  int64_t y;
+  uint32_t next;
+} Path;
+
+typedef uint32_t PathIdx;
 
 typedef struct {
-  Match *data;
-  uint32_t min_index;
-  uint32_t max_index;
-} MatchMap;
-
-typedef struct {
-  uint32_t sub_start_old;
-  uint32_t sub_start_new;
-  uint32_t sub_len;
-} BetterMatch;
-
-#define BETTER_MATCH_ARRAY_INLINE_CAPA 6
-
-typedef struct {
-  BetterMatch *data;
-  BetterMatch inline_data[BETTER_MATCH_ARRAY_INLINE_CAPA];
-  uint32_t len;
-  uint32_t capa;
-  uint32_t max;
-} BetterMatchArray;
-
-typedef struct {
-  ChangeType change_type : 32;
-  uint32_t start_old;
-  uint32_t len_old;
-  uint32_t start_new;
-  uint32_t len_new;
-  uint32_t children[2];
-  uint64_t cost;
-} ChangeSetTree;
-
-typedef struct {
-  ChangeSetTree *data;
+  Path *data;
   uint32_t len;
   uint32_t capa;
-} ChangeSetTreeArray;
+} PathArray;
 
-typedef struct {
-  uint32_t *data;
-  uint32_t rows;
-  uint32_t cols;
-} Matrix;
+// typedef struct {
+//   uint32_t *data;
+//   uint32_t rows;
+//   uint32_t cols;
+// } Matrix;
 
 typedef enum {
   CALLBACK_START,
@@ -140,23 +138,27 @@ struct DiffContext;
 
 typedef void (*Callback)(struct DiffContext *ctx, CallbackType type, Token *token_old, Token *token_new);
 
-typedef struct {
+typedef struct DiffContext {
   TokenArray tokens_old;
   TokenArray tokens_new;
-  MatchMap match_map;
-  MatchMap next_match_map;
-  ChangeSetTreeArray change_set_trees;
-  IndexValue index_list;
-  IndexKey *table_entries_old;
-  st_table *old_index_map;
+  Token *tokens_old_;
+  Token *tokens_new_;
+  // MatchMap match_map;
+  // MatchMap next_match_map;
+  PathArray path_array;
+  // IndexValue index_list;
+  // IndexKey *table_entries_old;
+  // st_table *old_index_map;
   const char *input_old;
   const char *input_new;
   VALUE rb_old;
   VALUE rb_new;
   bool output_eq;
   bool split_lines;
-  Matrix matrix;
   Callback cb;
+  TokenArray tmp_tokens_old;
+  TokenArray tmp_tokens_new;
+  VALUE rb_out_ary;
 } DiffContext;
 
 static void change_set_free(void *ptr)
@@ -192,20 +194,47 @@ static const rb_data_type_t change_set_type = {
     .flags = RUBY_TYPED_FREE_IMMEDIATELY,
 };
 
+static void
+add_token(TokenArray *tokens, Token token) {
+  if(tokens->len >= tokens->capa) {
+    size_t new_capa = 2 * tokens->capa;
+    RB_REALLOC_N(tokens->data, Token, new_capa);
+    tokens->capa = new_capa;
+  }
 
-
-static st_index_t
-index_key_hash(st_data_t arg) {
-  IndexKey *table_entry = (IndexKey *) arg;
-
-  uint32_t start_byte = table_entry->start_byte;
-  uint32_t end_byte = table_entry->end_byte;
-  const char *str = table_entry->input + start_byte;
-  size_t len = end_byte - start_byte;
-
-  //return st_hash(str, len, FNV1_32A_INIT);
-  return rb_memhash(str, len); // ^ len;
+  tokens->data[tokens->len] = token;
+  tokens->len++;
 }
+
+static void
+token_array_init(TokenArray *token_array, uint32_t capa) {
+  token_array->data = RB_ZALLOC_N(Token, capa);
+  token_array->capa = capa;
+  token_array->len = 0;
+}
+
+static void
+token_array_destroy(TokenArray *token_array) {
+  xfree(token_array->data);
+}
+
+static void
+token_array_reset(TokenArray *token_array) {
+  token_array->len = 0;
+}
+
+// static st_index_t
+// index_key_hash(st_data_t arg) {
+//   IndexKey *table_entry = (IndexKey *) arg;
+
+//   uint32_t start_byte = table_entry->start_byte;
+//   uint32_t end_byte = table_entry->end_byte;
+//   const char *str = table_entry->input + start_byte;
+//   size_t len = end_byte - start_byte;
+
+//   //return st_hash(str, len, FNV1_32A_INIT);
+//   return rb_memhash(str, len); // ^ len;
+// }
 
 static bool
 token_eql(Token *x, const char *input_x, Token *y, const char *input_y) {
@@ -227,33 +256,33 @@ token_eql(Token *x, const char *input_x, Token *y, const char *input_y) {
   }
 }
 
-static int
-index_key_cmp(st_data_t x, st_data_t y) {
-  IndexKey *table_entry_x = (IndexKey *) x;
-  IndexKey *table_entry_y = (IndexKey *) y;
+// static int
+// index_key_cmp(st_data_t x, st_data_t y) {
+//   IndexKey *table_entry_x = (IndexKey *) x;
+//   IndexKey *table_entry_y = (IndexKey *) y;
 
-  uint32_t start_byte_x = table_entry_x->start_byte;
-  uint32_t end_byte_x = table_entry_x->end_byte;
+//   uint32_t start_byte_x = table_entry_x->start_byte;
+//   uint32_t end_byte_x = table_entry_x->end_byte;
 
-  uint32_t start_byte_y = table_entry_y->start_byte;
-  uint32_t end_byte_y = table_entry_y->end_byte;
+//   uint32_t start_byte_y = table_entry_y->start_byte;
+//   uint32_t end_byte_y = table_entry_y->end_byte;
 
-  uint32_t len_x = end_byte_x - start_byte_x;
-  uint32_t len_y = end_byte_y - start_byte_y;
+//   uint32_t len_x = end_byte_x - start_byte_x;
+//   uint32_t len_y = end_byte_y - start_byte_y;
 
-  if(len_x != len_y) {
-    return 1;
-  } else {
-    const char *str_x = table_entry_x->input + start_byte_x;
-    const char *str_y = table_entry_y->input + start_byte_y;
-    return memcmp(str_x, str_y, len_x);
-  }
-}
+//   if(len_x != len_y) {
+//     return 1;
+//   } else {
+//     const char *str_x = table_entry_x->input + start_byte_x;
+//     const char *str_y = table_entry_y->input + start_byte_y;
+//     return memcmp(str_x, str_y, len_x);
+//   }
+// }
 
-static const struct st_hash_type type_index_key_hash = {
-    index_key_cmp,
-    index_key_hash,
-};
+// static const struct st_hash_type type_index_key_hash = {
+//     index_key_cmp,
+//     index_key_hash,
+// };
 
 // static IndexListEntry *
 // index_list_request_entry(IndexValue *index_list) {
@@ -268,18 +297,18 @@ static const struct st_hash_type type_index_key_hash = {
 // }
 
 
-static uint32_t
-index_list_append(IndexValue *index_list, st_data_t pair) {
-  if(!(index_list->len < index_list->capa)) {
-    uint32_t new_capa = 2 * index_list->capa;
-    RB_REALLOC_N(index_list->entries, st_data_t, new_capa);
-    index_list->capa = new_capa;
-  }
-  uint32_t index = index_list->len;
-  index_list->entries[index] = pair;
-  index_list->len++;
-  return index;
-}
+// static uint32_t
+// index_list_append(IndexValue *index_list, st_data_t pair) {
+//   if(!(index_list->len < index_list->capa)) {
+//     uint32_t new_capa = 2 * index_list->capa;
+//     RB_REALLOC_N(index_list->entries, st_data_t, new_capa);
+//     index_list->capa = new_capa;
+//   }
+//   uint32_t index = index_list->len;
+//   index_list->entries[index] = pair;
+//   index_list->len++;
+//   return index;
+// }
 
 //   if(entry == NULL) {
 //       ret_entry = index_list_request_entry(index_list);
@@ -304,32 +333,32 @@ index_list_append(IndexValue *index_list, st_data_t pair) {
 //   return ret_entry;
 // }
 
-typedef struct {
-  IndexValue *index_list;
-  uint32_t value;
-} UpdateArg;
+// typedef struct {
+//   IndexValue *index_list;
+//   uint32_t value;
+// } UpdateArg;
 
-_Static_assert(sizeof(st_data_t) >= 2 * sizeof(uint32_t));
+// _Static_assert(sizeof(st_data_t) >= 2 * sizeof(uint32_t));
 
-#define MAKE_PAIR64(f, s) ((((st_data_t)(s)) << 32) | ((st_data_t)(f)))
-#define PAIR64_FIRST(p) ((p) & 0xFFFFFFFF)
-#define PAIR64_SECOND(p) ((p) >> 32)
+// #define MAKE_PAIR64(f, s) ((((st_data_t)(s)) << 32) | ((st_data_t)(f)))
+// #define PAIR64_FIRST(p) ((p) & 0xFFFFFFFF)
+// #define PAIR64_SECOND(p) ((p) >> 32)
 
-static int
-update_callback(st_data_t *key, st_data_t *value, st_data_t arg, int existing) {
-  UpdateArg *update_arg = (UpdateArg *) arg;
-  IndexValue *index_list = update_arg->index_list;
-  uint32_t insert_value = update_arg->value;
+// static int
+// update_callback(st_data_t *key, st_data_t *value, st_data_t arg, int existing) {
+//   UpdateArg *update_arg = (UpdateArg *) arg;
+//   IndexValue *index_list = update_arg->index_list;
+//   uint32_t insert_value = update_arg->value;
 
-  if(!existing) {
-    *value = MAKE_PAIR64(insert_value, UINT32_MAX);
-  } else {
-    uint32_t inserted_index = index_list_append(index_list, *value);
-    *value = MAKE_PAIR64(insert_value, inserted_index);
-  }
+//   if(!existing) {
+//     *value = MAKE_PAIR64(insert_value, UINT32_MAX);
+//   } else {
+//     uint32_t inserted_index = index_list_append(index_list, *value);
+//     *value = MAKE_PAIR64(insert_value, inserted_index);
+//   }
 
-  return ST_CONTINUE;
-}
+//   return ST_CONTINUE;
+// }
 
 // static inline uint32_t
 // matrix_get(Matrix *matrix, uint32_t row, uint32_t col) {
@@ -353,116 +382,114 @@ update_callback(st_data_t *key, st_data_t *value, st_data_t arg, int existing) {
 //   xfree(matrix->data);
 // }
 
-static void
-match_map_init(MatchMap *map, uint32_t len) {
-  map->data = RB_ZALLOC_N(Match, len);
-  map->min_index = len;
-  map->max_index = 0;
-}
+// static void
+// match_map_init(MatchMap *map, uint32_t len) {
+//   map->data = RB_ZALLOC_N(Match, len);
+//   map->min_index = len;
+//   map->max_index = 0;
+// }
 
-static void
-match_map_destroy(MatchMap *map) {
-  xfree(map->data);
-}
+// static void
+// match_map_destroy(MatchMap *map) {
+//   xfree(map->data);
+// }
 
-static void
-match_map_insert(MatchMap *map, uint32_t index, uint32_t len) {
-  Match match = {
-    .len = len
-  };
-  map->data[index] = match;
-  map->max_index = MAX(map->max_index, index);
-  map->min_index = MIN(map->min_index, index);
-}
+// static void
+// match_map_insert(MatchMap *map, uint32_t index, uint32_t len) {
+//   Match match = {
+//     .len = len
+//   };
+//   map->data[index] = match;
+//   map->max_index = MAX(map->max_index, index);
+//   map->min_index = MIN(map->min_index, index);
+// }
 
-static void
-match_map_reset(MatchMap *map) {
-  if(map->min_index <= map->max_index) {
-     memset(map->data + map->min_index, 0, (map->max_index - map->min_index + 1) * sizeof(Match));
-  }
-  // memset(map->data, 0, map->max_index * sizeof(uint32_t));
-}
+// static void
+// match_map_reset(MatchMap *map) {
+//   if(map->min_index <= map->max_index) {
+//      memset(map->data + map->min_index, 0, (map->max_index - map->min_index + 1) * sizeof(Match));
+//   }
+//   // memset(map->data, 0, map->max_index * sizeof(uint32_t));
+// }
 
-static void
-better_match_array_init(BetterMatchArray *better_match_array) {
-    better_match_array->data = &better_match_array->inline_data[0];
-    better_match_array->capa = BETTER_MATCH_ARRAY_INLINE_CAPA;
-    better_match_array->len = 0;
-    better_match_array->max = 0;
+// static void
+// better_match_array_init(BetterMatchArray *better_match_array) {
+//     better_match_array->data = &better_match_array->inline_data[0];
+//     better_match_array->capa = BETTER_MATCH_ARRAY_INLINE_CAPA;
+//     better_match_array->len = 0;
+//     better_match_array->max = 0;
 
-}
+// }
 
-static uint32_t
-better_match_array_insert(BetterMatchArray *better_match_array, BetterMatch match) {
+// static uint32_t
+// better_match_array_insert(BetterMatchArray *better_match_array, BetterMatch match) {
 
-  if(better_match_array->max < match.sub_len) {
-    better_match_array->data[0] = match;
-    better_match_array->len = 1;
-    better_match_array->max = match.sub_len;
-    return 0;
-  } else {
-    if(!(better_match_array->len < better_match_array->capa)) {
-      uint32_t new_capa = 2 * better_match_array->capa;
-      if(better_match_array->data == &better_match_array->inline_data[0]) {
-        better_match_array->data = RB_ALLOC_N(BetterMatch, new_capa);
-        memcpy(better_match_array->data, &better_match_array->inline_data[0], sizeof(better_match_array->inline_data));
-      } else {
-        RB_REALLOC_N(better_match_array->data, BetterMatch, new_capa);
-      }
-      better_match_array->capa = new_capa;
-    }
+//   if(better_match_array->max < match.sub_len) {
+//     better_match_array->data[0] = match;
+//     better_match_array->len = 1;
+//     better_match_array->max = match.sub_len;
+//     return 0;
+//   } else {
+//     if(!(better_match_array->len < better_match_array->capa)) {
+//       uint32_t new_capa = 2 * better_match_array->capa;
+//       if(better_match_array->data == &better_match_array->inline_data[0]) {
+//         better_match_array->data = RB_ALLOC_N(BetterMatch, new_capa);
+//         memcpy(better_match_array->data, &better_match_array->inline_data[0], sizeof(better_match_array->inline_data));
+//       } else {
+//         RB_REALLOC_N(better_match_array->data, BetterMatch, new_capa);
+//       }
+//       better_match_array->capa = new_capa;
+//     }
 
-    uint32_t index = better_match_array->len;
-    better_match_array->data[index] = match;
-    better_match_array->len++;
+//     uint32_t index = better_match_array->len;
+//     better_match_array->data[index] = match;
+//     better_match_array->len++;
 
-    return index;
-  }
-}
+//     return index;
+//   }
+// }
 
 // static uint32_t
 // better_match_array_reset(BetterMatchArray *better_match_array) {
 //   memset(better_match_array->data, 0, sizeof(BetterMatch) * better_match_array->len);
 // }
 
+// static void
+// better_match_array_destroy(BetterMatchArray *better_match_array) {
+//   if(better_match_array->data != &better_match_array->inline_data[0]) {
+//     xfree(better_match_array->data);
+//   }
+// }
+
 static void
-better_match_array_destroy(BetterMatchArray *better_match_array) {
-  if(better_match_array->data != &better_match_array->inline_data[0]) {
-    xfree(better_match_array->data);
-  }
+path_array_init(PathArray *path_array, uint32_t capa) {
+  path_array->data = RB_ZALLOC_N(Path, capa);
+  path_array->capa = capa;
+  // 0 is the empty list
+  path_array->len = 1;
 }
 
 static void
-change_set_tree_array_init(ChangeSetTreeArray *change_set_tree_array, uint32_t capa) {
-  change_set_tree_array->data = RB_ZALLOC_N(ChangeSetTree, capa);
-  change_set_tree_array->capa = capa;
-
-  // we use the first element as a sentinel
-  change_set_tree_array->len = 1;
-}
-
-static void
-change_set_tree_array_destroy(ChangeSetTreeArray *change_set_tree_array) {
-  xfree(change_set_tree_array->data);
+path_array_destroy(PathArray *path_array) {
+  xfree(path_array->data);
 }
 
 static uint32_t
-change_set_tree_array_push(ChangeSetTreeArray *change_set_tree_array) {
-  if(!(change_set_tree_array->len < change_set_tree_array->capa)) {
-    uint32_t new_capa = 2 * change_set_tree_array->capa;
-    RB_REALLOC_N(change_set_tree_array->data, ChangeSetTree, new_capa);
-    change_set_tree_array->capa = new_capa;
+path_array_push(PathArray *path_array, Path **path) {
+  if(!(path_array->len < path_array->capa)) {
+    uint32_t new_capa = 2 * path_array->capa;
+    RB_REALLOC_N(path_array->data, Path, new_capa);
+    path_array->capa = new_capa;
   }
-
-  uint32_t index = change_set_tree_array->len;
-  change_set_tree_array->data[index] = (ChangeSetTree){0,};
-  change_set_tree_array->len++;
+  uint32_t index = path_array->len;
+  *path = &path_array->data[index];
+  path_array->len++;
   return index;
 }
 
-static inline ChangeSetTree *
-change_set_tree_array_get(ChangeSetTreeArray *change_set_tree_array, uint32_t idx) {
-  return &change_set_tree_array->data[idx];
+static inline Path *
+path_array_get(PathArray *path_array, uint32_t idx) {
+  return &path_array->data[idx];
 }
 
 static VALUE
@@ -515,50 +542,112 @@ rb_change_set_new(ChangeType change_type, VALUE rb_input,
 }
 
 static void
-change_set_from_tree(DiffContext *ctx, uint32_t root_idx, VALUE rb_ary) {
-  // empty node
-  if(root_idx == 0) {
-    return;
-  }
-
-  ChangeSetTree *tree = &ctx->change_set_trees.data[root_idx];
-
-  if(tree->change_type == CHANGE_TYPE_MOD || tree->change_type == CHANGE_TYPE_EQL) {
-    if(tree->change_type == CHANGE_TYPE_MOD || (tree->change_type ==CHANGE_TYPE_EQL && ctx->output_eq)) {
-      rb_ary_push(rb_ary, rb_change_set_new_full(tree->change_type, ctx->rb_old, ctx->rb_new,
-                                                  &ctx->tokens_old, tree->start_old, tree->len_old,
-                                                  &ctx->tokens_new, tree->start_new, tree->len_new));
-    }
+output_change_set(DiffContext *ctx) {
+  ChangeType change_type;
+  if(ctx->tmp_tokens_new.len == ctx->tmp_tokens_old.len) {
+    if(ctx->tmp_tokens_new.len == 0) return;
+    change_type = CHANGE_TYPE_EQL;
+  } else if(ctx->tmp_tokens_new.len == 0) {
+    change_type = CHANGE_TYPE_DEL;
+  } else if(ctx->tmp_tokens_old.len == 0) {
+    change_type = CHANGE_TYPE_ADD;
   } else {
-    size_t start, len;
-    TokenArray *tokens;
-    VALUE rb_input;
-    switch(tree->change_type) {
-      case CHANGE_TYPE_ADD: {
-        start = tree->start_new;
-        len = tree->len_new;
-        tokens = &ctx->tokens_new;
-        rb_input = ctx->rb_new;
-        break;
-      }
-      case CHANGE_TYPE_DEL: {
-        start = tree->start_old;
-        len = tree->len_old;
-        tokens = &ctx->tokens_old;
-        rb_input = ctx->rb_old;
-        break;
-      }
-      default: {
-        rb_raise(rb_eRuntimeError, "unexpected change type %d", tree->change_type);
-      }
-    }
-    size_t end = start + len;
-    rb_ary_push(rb_ary, rb_change_set_new(tree->change_type, rb_input, tokens, start, end - start));
+    change_type = CHANGE_TYPE_MOD;
   }
 
-  change_set_from_tree(ctx, tree->children[0], rb_ary);
-  change_set_from_tree(ctx, tree->children[1], rb_ary);
+  rb_ary_push(ctx->rb_out_ary, rb_change_set_new_full(change_type, ctx->rb_old, ctx->rb_new,
+                                                      &ctx->tmp_tokens_old, 0, ctx->tmp_tokens_old.len,
+                                                      &ctx->tmp_tokens_new, 0, ctx->tmp_tokens_new.len));
+
+  // //FIXME: splitting modification is tricky...                    
+  // if(change_type == CHANGE_TYPE_MOD || change_type == CHANGE_TYPE_EQL) {
+  // } else {
+  //   size_t start, len;
+  //   TokenArray *tokens;
+  //   VALUE rb_input;
+  //   switch(change_type) {
+  //     case CHANGE_TYPE_ADD: {
+  //       start = start_new;
+  //       len = len_new;
+  //       tokens = &ctx->tokens_new;
+  //       rb_input = ctx->rb_new;
+  //       break;
+  //     }
+  //     case CHANGE_TYPE_DEL: {
+  //       start = start_old;
+  //       len = len_old;
+  //       tokens = &ctx->tokens_old;
+  //       rb_input = ctx->rb_old;
+  //       break;
+  //     }
+  //     default: {
+  //       rb_raise(rb_eRuntimeError, "unexpected change type");
+  //     }
+  //   }
+
+  //   size_t end = start + len;
+  //   size_t next_start = start;
+
+  //   // for(size_t i = start; i < end; i++) {
+  //   //   Token *token = &tokens->data[i];
+  //   //   if(token->before_newline) {
+  //   //     rb_ary_push(rb_out_ary, rb_change_set_new(change_type, rb_input, tokens, next_start, i - next_start + 1));
+  //   //     next_start = i + 1;
+  //   //   }
+  //   // }
+
+  //   if(next_start < end) {
+  //     rb_ary_push(ctx->rb_out_ary, rb_change_set_new(change_type, rb_input, tokens, next_start, end - next_start));
+  //   }
+  // }
 }
+
+
+// static void
+// change_set_from_tree(DiffContext *ctx, uint32_t root_idx, VALUE rb_ary) {
+//   // empty node
+//   if(root_idx == 0) {
+//     return;
+//   }
+
+//   ChangeSetTree *tree = &ctx->change_set_trees.data[root_idx];
+
+//   if(tree->change_type == CHANGE_TYPE_MOD || tree->change_type == CHANGE_TYPE_EQL) {
+//     if(tree->change_type == CHANGE_TYPE_MOD || (tree->change_type ==CHANGE_TYPE_EQL && ctx->output_eq)) {
+//       rb_ary_push(rb_ary, rb_change_set_new_full(tree->change_type, ctx->rb_old, ctx->rb_new,
+//                                                   &ctx->tokens_old, tree->start_old, tree->len_old,
+//                                                   &ctx->tokens_new, tree->start_new, tree->len_new));
+//     }
+//   } else {
+//     size_t start, len;
+//     TokenArray *tokens;
+//     VALUE rb_input;
+//     switch(tree->change_type) {
+//       case CHANGE_TYPE_ADD: {
+//         start = tree->start_new;
+//         len = tree->len_new;
+//         tokens = &ctx->tokens_new;
+//         rb_input = ctx->rb_new;
+//         break;
+//       }
+//       case CHANGE_TYPE_DEL: {
+//         start = tree->start_old;
+//         len = tree->len_old;
+//         tokens = &ctx->tokens_old;
+//         rb_input = ctx->rb_old;
+//         break;
+//       }
+//       default: {
+//         rb_raise(rb_eRuntimeError, "unexpected change type %d", tree->change_type);
+//       }
+//     }
+//     size_t end = start + len;
+//     rb_ary_push(rb_ary, rb_change_set_new(tree->change_type, rb_input, tokens, start, end - start));
+//   }
+
+//   change_set_from_tree(ctx, tree->children[0], rb_ary);
+//   change_set_from_tree(ctx, tree->children[1], rb_ary);
+// }
 
 // static void
 // output_change_set(DiffContext *ctx, ChangeType change_type, size_t start_old, size_t len_old, size_t start_new, size_t len_new) {
@@ -610,27 +699,27 @@ change_set_from_tree(DiffContext *ctx, uint32_t root_idx, VALUE rb_ary) {
 // }
 
 
-static void
-index_old(DiffContext *ctx, uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new) {
-  st_clear(ctx->old_index_map);
-  ctx->index_list.len = 0;
+// static void
+// index_old(DiffContext *ctx, uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new) {
+//   st_clear(ctx->old_index_map);
+//   ctx->index_list.len = 0;
 
-  for(size_t iold = start_old; iold < start_old + len_old; iold++) {
-    Token *token = &ctx->tokens_old.data[iold];
+//   for(size_t iold = start_old; iold < start_old + len_old; iold++) {
+//     Token *token = &ctx->tokens_old.data[iold];
 
-    IndexKey *key = &ctx->table_entries_old[iold];
-    key->start_byte = token->start_byte;
-    key->end_byte = token->end_byte;
-    key->input = ctx->input_old;
+//     IndexKey *key = &ctx->table_entries_old[iold];
+//     key->start_byte = token->start_byte;
+//     key->end_byte = token->end_byte;
+//     key->input = ctx->input_old;
 
-    UpdateArg arg = {
-      .index_list = &ctx->index_list,
-      .value = iold,
-    };
+//     UpdateArg arg = {
+//       .index_list = &ctx->index_list,
+//       .value = iold,
+//     };
 
-    st_update(ctx->old_index_map, (st_data_t) key, update_callback, (st_data_t) &arg);
-  }
-}
+//     st_update(ctx->old_index_map, (st_data_t) key, update_callback, (st_data_t) &arg);
+//   }
+// }
 
 typedef struct {
   int64_t left;
@@ -672,7 +761,7 @@ forward(DiffContext *ctx, Box *box, int64_t *vf, int64_t *vb, int64_t d, int64_t
     y = box->top + (x - box->left) - k;
     py = (d == 0 || x != px) ? y : y - 1;
 
-    while(x < box->right && y < box->bottom && token_eql(&ctx->tokens_old.data[x], ctx->input_old, &ctx->tokens_new.data[y], ctx->input_new)) {
+    while(x < box->right && y < box->bottom && token_eql(&ctx->tokens_old_[x], ctx->input_old, &ctx->tokens_new_[y], ctx->input_new)) {
       x++;
       y++;
     }
@@ -705,7 +794,7 @@ backward(DiffContext *ctx, Box *box, int64_t *vf, int64_t *vb, int64_t d, int64_
     x = box->left + (y - box->top) + k;
     px = (d == 0 || y != py) ? x : x + 1;
 
-    while(x > box->left && y > box->top && token_eql(&ctx->tokens_old.data[x - 1], ctx->input_old, &ctx->tokens_new.data[y - 1], ctx->input_new)) {
+    while(x > box->left && y > box->top && token_eql(&ctx->tokens_old_[x - 1], ctx->input_old, &ctx->tokens_new_[y - 1], ctx->input_new)) {
       x--;
       y--;
     }
@@ -726,8 +815,9 @@ midpoint(DiffContext *ctx, Box *box, Snake *snake) {
 
   int64_t max = (BOX_SIZE(box) + 1) / 2;
   int64_t vlen = 2 * max + 1;
-  int64_t *vf = RB_ZALLOC_N(int64_t, vlen);
-  int64_t *vb = RB_ZALLOC_N(int64_t, vlen);
+  int64_t *vf_vb = RB_ZALLOC_N(int64_t, 2 * vlen);
+  int64_t *vf = vf_vb + 0;
+  int64_t *vb = vf_vb + vlen;
   bool retval = false;
 
   vf[1] = box->left;
@@ -745,20 +835,13 @@ midpoint(DiffContext *ctx, Box *box, Snake *snake) {
   }
 
 done:
-  xfree(vf);
-  xfree(vb);
+  xfree(vf_vb);
 
   return retval;
 }
 
-typedef struct Path {
-  int64_t x;
-  int64_t y;
-  struct Path *next;
-} Path;
 
-
-static Path *
+static PathIdx
 find_path(DiffContext *ctx, int64_t left, int64_t top, int64_t right, int64_t bottom) {
   Box box = {
     .left = left,
@@ -768,33 +851,42 @@ find_path(DiffContext *ctx, int64_t left, int64_t top, int64_t right, int64_t bo
   };
   Snake snake;
   if(!midpoint(ctx, &box, &snake)) {
-    return NULL;
+    return 0;
   } 
 
   int64_t start_x = snake.x1, start_y = snake.y1, finish_x = snake.x2, finish_y = snake.y2;
 
   assert(!(start_x == right && start_y == bottom));
 
-  Path *head = find_path(ctx, box.left, box.top, start_x, start_y);
-  Path *tail = find_path(ctx, finish_x, finish_y, box.right, box.bottom);
+  PathIdx head_idx = find_path(ctx, box.left, box.top, start_x, start_y);
+  PathIdx tail_idx = find_path(ctx, finish_x, finish_y, box.right, box.bottom);
 
-  if(head == NULL) {
-    head = RB_ZALLOC(Path);
+  if(head_idx == 0) {
+    Path *head;
+    head_idx = path_array_push(&ctx->path_array, &head);
     head->x = start_x;
     head->y = start_y;
   }
 
-  if(tail == NULL) {
-    tail = RB_ZALLOC(Path);
+  if(tail_idx == 0) {
+    Path *tail;
+    tail_idx = path_array_push(&ctx->path_array, &tail);
     tail->x = finish_x;
     tail->y = finish_y;
   }
 
-  Path *iter = head;
-  while(iter->next) iter = iter->next;
-  iter->next = tail;
+  PathIdx iter_idx = head_idx;
+  while(true) {
+    Path *iter = path_array_get(&ctx->path_array, iter_idx);
+    if(!iter->next) {
+      iter->next = tail_idx;
+      break;
+    } else {
+      iter_idx = iter->next;
+    }
+  }
 
-  return head;
+  return head_idx;
 }
 
 static void
@@ -803,14 +895,14 @@ call_cb(DiffContext *ctx, int64_t x1, int64_t y1, int64_t x2, int64_t y2) {
   Token *token_old = NULL, *token_new = NULL;
   if(x1 == x2) {
     type = CALLBACK_INS;
-    token_new = &ctx->tokens_new.data[y1];
+    token_new = &ctx->tokens_new_[y1];
   } else if(y1 == y2) {
     type = CALLBACK_DEL;
-    token_old = &ctx->tokens_old.data[x1];
+    token_old = &ctx->tokens_old_[x1];
   } else {
     type = CALLBACK_EQ;
-    token_old = &ctx->tokens_old.data[x1];
-    token_new = &ctx->tokens_old.data[y1];
+    token_old = &ctx->tokens_old_[x1];
+    token_new = &ctx->tokens_new_[y1];
   }
 
   ctx->cb(ctx, type, token_old, token_new);
@@ -818,7 +910,7 @@ call_cb(DiffContext *ctx, int64_t x1, int64_t y1, int64_t x2, int64_t y2) {
 
 static void
 walk_diagonal(DiffContext *ctx, int64_t x1, int64_t y1, int64_t x2, int64_t y2, int64_t *out_x1, int64_t *out_y1) {
-  while(x1 < x2 && y1 < y2 && token_eql(&ctx->tokens_old.data[x1], ctx->input_old, &ctx->tokens_new.data[y1], ctx->input_new)) {
+  while(x1 < x2 && y1 < y2 && token_eql(&ctx->tokens_old_[x1], ctx->input_old, &ctx->tokens_new_[y1], ctx->input_new)) {
     call_cb(ctx, x1, y1, x1 + 1, y1 + 1);
     x1++;
     y1++;
@@ -827,28 +919,35 @@ walk_diagonal(DiffContext *ctx, int64_t x1, int64_t y1, int64_t x2, int64_t y2, 
   *out_y1 = y1;
 }
 
-static void
-free_path(Path *path) {
-  if(path->next != NULL) {
-    free_path(path->next);
-  }
-  xfree(path);
-}
+// static void
+// free_path(Path *path) {
+//   if(path->next != NULL) {
+//     free_path(path->next);
+//   }
+//   xfree(path);
+// }
 
 static void 
 walk_snakes(DiffContext *ctx, uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new) {
-  Path *path = find_path(ctx, start_old, start_new, len_old, len_new);
-  if(path == NULL) return;
+  PathIdx path_idx = find_path(ctx, start_old, start_new, len_old, len_new);
+  if(path_idx == 0) return;
 
   int64_t x1, y1, x2, y2;
-  Path *iter = path;
-  while(iter) {
-    x1 = iter->x;
-    y1 = iter->y;
-    iter = iter->next;
-    x2 = iter->x;
-    y2 = iter->y;
-    iter = iter->next;
+  PathIdx iter_idx = path_idx;
+  Path *iter;
+  bool done = false;
+
+  iter = path_array_get(&ctx->path_array, iter_idx);
+  x1 = iter->x;
+  y1 = iter->y;
+  iter_idx = iter->next;
+  iter = path_array_get(&ctx->path_array, iter_idx);
+  x2 = iter->x;
+  y2 = iter->y;
+  iter_idx = iter->next;
+
+  while(true) {
+    fprintf(stderr, "%d %d %d %d\n", x1, y1, x2, y2);
 
     walk_diagonal(ctx, x1, y1, x2, y2, &x1, &y1);
     int64_t d = (x2 - x1) - (y2 - y1);
@@ -860,345 +959,381 @@ walk_snakes(DiffContext *ctx, uint32_t start_old, uint32_t len_old, uint32_t sta
       x1++;
     }
     walk_diagonal(ctx, x1, y1, x2, y2, &x1, &y1);
-  }
 
-  free_path(path);
+    if(iter_idx == 0) {
+      break;
+    } else {
+      x1 = x2;
+      y1 = y2;
+      iter = path_array_get(&ctx->path_array, iter_idx);
+      x2 = iter->x;
+      y2 = iter->y;
+      iter_idx = iter->next;
+    }
+  } 
+
+  // free_path(path);
 }
 
-static void print_diff(DiffContext *ctx, CallbackType type, Token *old_token, Token *new_token) {
-  if(type == CALLBACK_DEL) {
-    fprintf(stderr, "old_token DEL (%d): %.*s\n", old_token->implicit, old_token->end_byte - old_token->start_byte, ctx->input_new + old_token->start_byte);
+static void 
+collect_change_sets(DiffContext *ctx, CallbackType type, Token *token_old, Token *token_new) {
+  switch(type) {
+    case CALLBACK_START:
+      token_array_reset(&ctx->tmp_tokens_new);
+      token_array_reset(&ctx->tmp_tokens_old);
+      break;
+    case CALLBACK_FINISH:
+      output_change_set(ctx);
+      break;
+    case CALLBACK_DEL:
+      fprintf(stderr, "token_old DEL (%d): %.*s\n", token_old->implicit, token_old->end_byte - token_old->start_byte, ctx->input_new + token_old->start_byte);
+      add_token(&ctx->tmp_tokens_old, *token_old);
+      break;
+    case CALLBACK_EQ:
+      output_change_set(ctx);
+      fprintf(stderr, "token EQ (%d): %.*s\n", token_old->implicit, token_old->end_byte - token_old->start_byte, ctx->input_old + token_old->start_byte);
+      fprintf(stderr, "token EQ (%d): %.*s\n", token_new->implicit, token_new->end_byte - token_new->start_byte, ctx->input_new + token_new->start_byte);
+      fprintf(stderr, "RESET\n");
+      token_array_reset(&ctx->tmp_tokens_new);
+      token_array_reset(&ctx->tmp_tokens_old);
+      if(ctx->output_eq) {
+        add_token(&ctx->tmp_tokens_old, *token_old);
+        add_token(&ctx->tmp_tokens_new, *token_new);
+      }
+      break;
+    case CALLBACK_INS:
+      fprintf(stderr, "token_new INS (%d): %.*s\n", token_new->implicit, token_new->end_byte - token_new->start_byte, ctx->input_new + token_new->start_byte);
+      add_token(&ctx->tmp_tokens_new, *token_new);
+      break;
   }
-  if(type == CALLBACK_INS) {
-    fprintf(stderr, "new_token INS (%d): %.*s\n", new_token->implicit, new_token->end_byte - new_token->start_byte, ctx->input_new + new_token->start_byte);
-  }
+
 }
 
 static void
 token_diff2(DiffContext *ctx, uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new) {
-  ctx->cb = print_diff;
+  ctx->cb = collect_change_sets;
   ctx->cb(ctx, CALLBACK_START, NULL, NULL);
   walk_snakes(ctx, start_old, len_old, start_new, len_new);
   ctx->cb(ctx, CALLBACK_FINISH, NULL, NULL);
 }
 
 
-// Loosely based on https://github.com/paulgb/simplediff
-static uint32_t
-token_diff(DiffContext *ctx, uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new) {
-
-  if(len_old == 0 && len_new == 0) return 0;
-
-  // uint32_t sub_start_old = start_old;
-  // uint32_t sub_start_new = start_new;
-  uint32_t best_sub_length = 0;
-  BetterMatchArray better_matches;
-  better_match_array_init(&better_matches);
-  // for(size_t i = 0; i < ctx->tokens_new.len; i++) {
-  //   Token *token = &ctx->tokens_new.data[i];
-  //   fprintf(stderr, "TOKEN NEW (%d): %.*s\n", token->implicit, token->end_byte - token->start_byte, ctx->input_new + token->start_byte);
-  //   if(token->before_newline) {
-  //     fprintf(stderr, "BEFORE NEWLINE\n");
-  //   }
-  // }
-
-  // for(size_t i = 0; i < ctx->tokens_old.len; i++) {
-  //   Token *token = &ctx->tokens_old.data[i];
-  //   fprintf(stderr, "TOKEN OLD (%d): %.*s\n", token->implicit, token->end_byte - token->start_byte, ctx->input_old + token->start_byte);
-  //   if(token->before_newline) {
-  //     fprintf(stderr, "BEFORE NEWLINE\n");
-  //   }
-  // }
-
-  if(len_old > 0) {
-    // st_clear(next_match_map);
-    // st_clear(match_map);
-    match_map_reset(&ctx->next_match_map);
-    match_map_reset(&ctx->match_map);
-
-    index_old(ctx, start_old, len_old, start_new, len_new);
-
-
-    for(size_t inew = start_new; inew < start_new + len_new; inew++) {
-      Token *token = &ctx->tokens_new.data[inew];
-
-    //  fprintf(stderr, "TOKEN NEW: %.*s %d\n", token->end_byte - token->start_byte, input_new + token->start_byte, inew);
-    //   if(token->before_newline) {
-    //      fprintf(stderr, "HAVE FOUND NEWLINE TOKEN\n");
-    //     //  abort();
-    //   }
-
-      // assert(next_match_map->num_entries == 0);
-
-      IndexKey key = {
-        .start_byte = token->start_byte,
-        .end_byte = token->end_byte,
-        .input = ctx->input_new
-      };
-
-      st_data_t pair;
-      // uint32_t max_new_sub_len = 0;
-
-      // NOTE: at this point, next_match_map but be fresh, i.e., in a post-reset() state
-
-      if(st_lookup(ctx->old_index_map, (st_data_t)&key, &pair)) {
-        while(true) {
-          uint32_t value = PAIR64_FIRST(pair);
-          uint32_t next_index = PAIR64_SECOND(pair);
-
-          uint32_t iold = value;
-
-          uint32_t prev_sub_len = 0;
-
-          if(iold > start_old) {
-            prev_sub_len = ctx->match_map.data[iold - 1].len;
-            // st_lookup(match_map, (st_data_t) (iold - 1), (st_data_t *) &prev_sub_len);
-          }
-
-          /*if(!(prev_sub_len == 0 && token->dont_start))*/ {
-            uint32_t new_sub_len = prev_sub_len + 1;
-            uint32_t new_sub_start_old = iold - new_sub_len + 1;
-            uint32_t new_sub_start_new = inew - new_sub_len + 1;
-
-            // bool new_sub_ends_at_newline = false;
-            // bool cur_sub_ends_at_newline = false;
-
-            // if(sub_length > 0) {
-            //   int64_t cur_sub_last_token_index = sub_start_new + sub_length - 1;
-            //   int64_t new_sub_last_token_index = new_sub_start_new + new_sub_len - 1;
-
-            //   new_sub_ends_at_newline = new_sub_last_token_index > 0 && tokens_new->data[new_sub_last_token_index].before_newline;
-            //   cur_sub_ends_at_newline = cur_sub_last_token_index > 0 && tokens_new->data[cur_sub_last_token_index].before_newline;
-            // }
-
-
-            if(new_sub_len >= best_sub_length) { // || (new_sub_len == sub_length && !cur_sub_ends_at_newline && new_sub_ends_at_newline)) {
-
-                // if(new_sub_len == sub_length && (new_sub_ends_at_newline || !cur_sub_ends_at_newline)) {
-                //   fprintf(stderr, "HAVE FOUND NEWLINE TOKEN\n");
-                //   fprintf(stderr, "preferring (%d, %d) over (%d, %d)\n", new_sub_start_old, new_sub_len, sub_start_old, sub_length);
-                // }
-
-                // we need to find the *best* matches
-                // but we do not know until fully through the loop
-                // so either we go through twice, or we store all 'better' matches
-                // and eventually only consider the best
-                BetterMatch better_match = {
-                  .sub_len = new_sub_len,
-                  .sub_start_old = new_sub_start_old,
-                  .sub_start_new = new_sub_start_new,
-                };
-                best_sub_length = new_sub_len;
-                // sub_start_old = new_sub_start_old;
-                // sub_start_new = new_sub_start_new;
-
-                better_match_array_insert(&better_matches, better_match);
-
-                // fprintf(stderr, "%d => %d\n", new_sub_start_old, iold - sub_length + 1);
-                // fprintf(stderr, "%d => %d\n", new_sub_start_new, inew - sub_length + 1);
-                // sub_start_old = iold - sub_length + 1;
-                // sub_start_new = inew - sub_length + 1;
-            }
-            // assert(best_sub_length <= len_old);
-            // assert(best_sub_length <= len_new);
-            // assert(sub_start_old >= start_old);
-            // assert(sub_start_new >= start_new);
-            // st_insert(next_match_map, (st_data_t) iold, new_sub_len);
-            match_map_insert(&ctx->next_match_map, iold, new_sub_len);
-          }
-
-          if(next_index == UINT32_MAX) {
-            break;
-          } else {
-            pair = ctx->index_list.entries[next_index];
-          }
-        }
-      }
-
-      {
-        MatchMap tmp = ctx->match_map;
-        ctx->match_map = ctx->next_match_map;
-        ctx->next_match_map = tmp;
-
-        match_map_reset(&ctx->next_match_map);
-        // st_clear(next_match_map);
-      }
-    }
-  }
-
-  uint32_t ret_tree_idx = UINT32_MAX;
-
-  if(best_sub_length == 0) {
-    uint32_t tree_idxs[3] = {0,};
-    uint64_t cost = 0;
-
-    size_t common_len = MIN(len_old, len_new);
-    if(common_len > 0) {
-      tree_idxs[0] = change_set_tree_array_push(&ctx->change_set_trees);
-      ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, tree_idxs[0]);
-      tree->change_type = CHANGE_TYPE_MOD;
-      tree->cost = 2 * common_len;
-      tree->start_old = start_old;
-      tree->len_old = common_len;
-      tree->start_new = start_new;
-      tree->len_new = common_len;
-      cost += tree->cost;
-
-      // output_change_set(ctx, CHANGE_TYPE_MOD,
-      //                   start_old, common_len,
-      //                   start_new, common_len);
-
-      // rb_ary_push(rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_MOD, rb_input_old, rb_input_new,
-      //                                                tokens_old, start_old, common_len,
-      //                                                tokens_new, start_new, common_len));
-      start_old += common_len;
-      start_new += common_len;
-      len_old -= common_len;
-      len_new -= common_len;
-    }
-
-
-    if(len_old > 0) {
-      tree_idxs[1] = change_set_tree_array_push(&ctx->change_set_trees);
-      ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, tree_idxs[1]);
-      tree->change_type = CHANGE_TYPE_DEL;
-      tree->cost = len_old;
-      tree->start_old = start_old;
-      tree->len_old = len_old;
-      tree->start_new = 0;
-      tree->len_new = 0;
-      cost += tree->cost;
-
-
-      // rb_ary_push(rb_out_ary, rb_change_set_new(CHANGE_TYPE_DEL, rb_input_old, tokens_old, start_old, len_old));
-      // output_change_set(ctx, CHANGE_TYPE_DEL,
-      //                   start_old, len_old,
-      //                   0, 0);
-    }
-
-    if(len_new > 0) {
-      tree_idxs[2] = change_set_tree_array_push(&ctx->change_set_trees);
-      ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, tree_idxs[2]);
-      tree->change_type = CHANGE_TYPE_ADD;
-      tree->cost = len_new;
-      tree->start_old = 0;
-      tree->len_old = 0;
-      tree->start_new = start_new;
-      tree->len_new = len_new;
-      cost += tree->cost;
-      // rb_ary_push(rb_out_ary, rb_change_set_new(CHANGE_TYPE_ADD, rb_input_new, tokens_new, start_new, len_new));
-      // output_change_set(ctx, CHANGE_TYPE_ADD,
-      //                   0, 0,
-      //                   start_new, len_new);
-    }
-
-    if(tree_idxs[0] != 0) {
-      ret_tree_idx = tree_idxs[0];
-      ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, ret_tree_idx);
-      tree->children[0] = tree_idxs[1];
-      tree->children[1] = tree_idxs[2];
-      tree->cost = cost;
-    } else if(tree_idxs[1] != 0) {
-      ret_tree_idx = tree_idxs[1];
-      ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, ret_tree_idx);
-      tree->children[0] = tree_idxs[2];
-      tree->cost = cost;
-    } else {
-      ret_tree_idx = tree_idxs[2];
-      ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, ret_tree_idx);
-      tree->cost = cost;
-    }
-    // fprintf(stderr, "BASE COST: %lld\n", cost);
-  } else {
-
-    assert(best_sub_length <= len_old);
-    assert(best_sub_length <= len_new);
-
-    uint64_t best_cost = UINT64_MAX;
-    // fprintf(stderr, "----------------- %d %d\n", better_matches.len, best_sub_length);
-    for(uint32_t i = 0; i < better_matches.len; i++) {
-      BetterMatch *better_match = &better_matches.data[i];
-      uint32_t sub_length = better_match->sub_len;
-      bool is_best = sub_length == best_sub_length;
-      // fprintf(stderr, "%d MATCH WITH %d (%d) (%d)\n", i, better_match->sub_len, is_best, best_sub_length);
-      if(is_best) {
-
-        uint32_t sub_start_old = better_match->sub_start_old;
-        uint32_t sub_start_new = better_match->sub_start_new;
-
-        uint32_t left_start_old = start_old;
-        uint32_t left_len_old = sub_start_old - start_old;
-        uint32_t left_start_new = start_new;
-        uint32_t left_len_new = sub_start_new - start_new;
-
-        uint32_t right_start_old = sub_start_old + sub_length;
-        uint32_t right_len_old = (start_old + len_old) - (sub_start_old + sub_length);
-        uint32_t right_start_new = sub_start_new + sub_length;
-        uint32_t right_len_new = (start_new + len_new) - (sub_start_new + sub_length);
-
-        assert(left_start_old >= start_old);
-        assert(left_start_old + left_len_old < right_start_old);
-        assert(right_len_old <= len_old);
-
-        assert(left_start_new >= start_new);
-        assert(left_start_new + left_len_new < right_start_new);
-        assert(right_len_new <= len_new);
-
-        assert(right_len_new + left_len_new < len_new || right_len_old + right_len_old < len_old);
-
-        fprintf(stderr, "%ld\n", right_len_new + left_len_new + right_len_old + right_len_old);
-
-        fprintf(stderr, "N%u_%u__%u_%u -> N%u_%u__%u_%u;\n", start_old, len_old, start_new, len_new,  
-                                                             left_start_old, left_len_old, left_start_new, left_len_new);
-
-        // raise(SIGTRAP);
-
-        uint32_t left_idx = token_diff(ctx, left_start_old, left_len_old, left_start_new, left_len_new);
-
-        if(ctx->output_eq) {
-
-
-          // output_change_set(ctx, CHANGE_TYPE_EQL,
-          //                   sub_start_old, sub_length,
-          //                   sub_start_new, sub_length);
-
-          // rb_ary_push(rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_EQL, rb_input_old, rb_input_new,
-          //                                                tokens_old, sub_start_old, sub_length,
-          //                                                tokens_new, sub_start_new, sub_length));
-        }
-
-
-        fprintf(stderr, "N%u_%u__%u_%u -> N%u_%u__%u_%u;\n", start_old, len_old, start_new, len_new,
-                                                             right_start_old, right_len_old, right_start_new, right_len_new);
-
-        uint32_t right_idx = token_diff(ctx, right_start_old, right_len_old, right_start_new, right_len_new);
-
-        uint64_t cost = ctx->change_set_trees.data[left_idx].cost + ctx->change_set_trees.data[right_idx].cost;
-
-        if(cost < best_cost) {
-          ret_tree_idx = change_set_tree_array_push(&ctx->change_set_trees);
-          ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, ret_tree_idx);
-
-          tree->change_type = CHANGE_TYPE_EQL;
-          tree->cost = cost;
-          tree->start_old = sub_start_old;
-          tree->len_old = best_sub_length;
-          tree->start_new = sub_start_new;
-          tree->len_new = best_sub_length;
-          tree->children[0] = left_idx;
-          tree->children[1] = right_idx;
-
-          best_cost = cost;
-          // fprintf(stderr, "BEST COST: %lld\n", best_cost);
-        }
-      }
-    }
-    better_match_array_destroy(&better_matches);
-  }
-
-  assert(ret_tree_idx != 0);
-  return ret_tree_idx;
-}
+// // Loosely based on https://github.com/paulgb/simplediff
+// static uint32_t
+// token_diff(DiffContext *ctx, uint32_t start_old, uint32_t len_old, uint32_t start_new, uint32_t len_new) {
+
+//   if(len_old == 0 && len_new == 0) return 0;
+
+//   // uint32_t sub_start_old = start_old;
+//   // uint32_t sub_start_new = start_new;
+//   uint32_t best_sub_length = 0;
+//   BetterMatchArray better_matches;
+//   better_match_array_init(&better_matches);
+//   // for(size_t i = 0; i < ctx->tokens_new.len; i++) {
+//   //   Token *token = &ctx->tokens_new.data[i];
+//   //   fprintf(stderr, "TOKEN NEW (%d): %.*s\n", token->implicit, token->end_byte - token->start_byte, ctx->input_new + token->start_byte);
+//   //   if(token->before_newline) {
+//   //     fprintf(stderr, "BEFORE NEWLINE\n");
+//   //   }
+//   // }
+
+//   // for(size_t i = 0; i < ctx->tokens_old.len; i++) {
+//   //   Token *token = &ctx->tokens_old.data[i];
+//   //   fprintf(stderr, "TOKEN OLD (%d): %.*s\n", token->implicit, token->end_byte - token->start_byte, ctx->input_old + token->start_byte);
+//   //   if(token->before_newline) {
+//   //     fprintf(stderr, "BEFORE NEWLINE\n");
+//   //   }
+//   // }
+
+//   if(len_old > 0) {
+//     // st_clear(next_match_map);
+//     // st_clear(match_map);
+//     match_map_reset(&ctx->next_match_map);
+//     match_map_reset(&ctx->match_map);
+
+//     index_old(ctx, start_old, len_old, start_new, len_new);
+
+
+//     for(size_t inew = start_new; inew < start_new + len_new; inew++) {
+//       Token *token = &ctx->tokens_new.data[inew];
+
+//     //  fprintf(stderr, "TOKEN NEW: %.*s %d\n", token->end_byte - token->start_byte, input_new + token->start_byte, inew);
+//     //   if(token->before_newline) {
+//     //      fprintf(stderr, "HAVE FOUND NEWLINE TOKEN\n");
+//     //     //  abort();
+//     //   }
+
+//       // assert(next_match_map->num_entries == 0);
+
+//       IndexKey key = {
+//         .start_byte = token->start_byte,
+//         .end_byte = token->end_byte,
+//         .input = ctx->input_new
+//       };
+
+//       st_data_t pair;
+//       // uint32_t max_new_sub_len = 0;
+
+//       // NOTE: at this point, next_match_map but be fresh, i.e., in a post-reset() state
+
+//       if(st_lookup(ctx->old_index_map, (st_data_t)&key, &pair)) {
+//         while(true) {
+//           uint32_t value = PAIR64_FIRST(pair);
+//           uint32_t next_index = PAIR64_SECOND(pair);
+
+//           uint32_t iold = value;
+
+//           uint32_t prev_sub_len = 0;
+
+//           if(iold > start_old) {
+//             prev_sub_len = ctx->match_map.data[iold - 1].len;
+//             // st_lookup(match_map, (st_data_t) (iold - 1), (st_data_t *) &prev_sub_len);
+//           }
+
+//           /*if(!(prev_sub_len == 0 && token->dont_start))*/ {
+//             uint32_t new_sub_len = prev_sub_len + 1;
+//             uint32_t new_sub_start_old = iold - new_sub_len + 1;
+//             uint32_t new_sub_start_new = inew - new_sub_len + 1;
+
+//             // bool new_sub_ends_at_newline = false;
+//             // bool cur_sub_ends_at_newline = false;
+
+//             // if(sub_length > 0) {
+//             //   int64_t cur_sub_last_token_index = sub_start_new + sub_length - 1;
+//             //   int64_t new_sub_last_token_index = new_sub_start_new + new_sub_len - 1;
+
+//             //   new_sub_ends_at_newline = new_sub_last_token_index > 0 && tokens_new->data[new_sub_last_token_index].before_newline;
+//             //   cur_sub_ends_at_newline = cur_sub_last_token_index > 0 && tokens_new->data[cur_sub_last_token_index].before_newline;
+//             // }
+
+
+//             if(new_sub_len >= best_sub_length) { // || (new_sub_len == sub_length && !cur_sub_ends_at_newline && new_sub_ends_at_newline)) {
+
+//                 // if(new_sub_len == sub_length && (new_sub_ends_at_newline || !cur_sub_ends_at_newline)) {
+//                 //   fprintf(stderr, "HAVE FOUND NEWLINE TOKEN\n");
+//                 //   fprintf(stderr, "preferring (%d, %d) over (%d, %d)\n", new_sub_start_old, new_sub_len, sub_start_old, sub_length);
+//                 // }
+
+//                 // we need to find the *best* matches
+//                 // but we do not know until fully through the loop
+//                 // so either we go through twice, or we store all 'better' matches
+//                 // and eventually only consider the best
+//                 BetterMatch better_match = {
+//                   .sub_len = new_sub_len,
+//                   .sub_start_old = new_sub_start_old,
+//                   .sub_start_new = new_sub_start_new,
+//                 };
+//                 best_sub_length = new_sub_len;
+//                 // sub_start_old = new_sub_start_old;
+//                 // sub_start_new = new_sub_start_new;
+
+//                 better_match_array_insert(&better_matches, better_match);
+
+//                 // fprintf(stderr, "%d => %d\n", new_sub_start_old, iold - sub_length + 1);
+//                 // fprintf(stderr, "%d => %d\n", new_sub_start_new, inew - sub_length + 1);
+//                 // sub_start_old = iold - sub_length + 1;
+//                 // sub_start_new = inew - sub_length + 1;
+//             }
+//             // assert(best_sub_length <= len_old);
+//             // assert(best_sub_length <= len_new);
+//             // assert(sub_start_old >= start_old);
+//             // assert(sub_start_new >= start_new);
+//             // st_insert(next_match_map, (st_data_t) iold, new_sub_len);
+//             match_map_insert(&ctx->next_match_map, iold, new_sub_len);
+//           }
+
+//           if(next_index == UINT32_MAX) {
+//             break;
+//           } else {
+//             pair = ctx->index_list.entries[next_index];
+//           }
+//         }
+//       }
+
+//       {
+//         MatchMap tmp = ctx->match_map;
+//         ctx->match_map = ctx->next_match_map;
+//         ctx->next_match_map = tmp;
+
+//         match_map_reset(&ctx->next_match_map);
+//         // st_clear(next_match_map);
+//       }
+//     }
+//   }
+
+//   uint32_t ret_tree_idx = UINT32_MAX;
+
+//   if(best_sub_length == 0) {
+//     uint32_t tree_idxs[3] = {0,};
+//     uint64_t cost = 0;
+
+//     size_t common_len = MIN(len_old, len_new);
+//     if(common_len > 0) {
+//       tree_idxs[0] = change_set_tree_array_push(&ctx->change_set_trees);
+//       ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, tree_idxs[0]);
+//       tree->change_type = CHANGE_TYPE_MOD;
+//       tree->cost = 2 * common_len;
+//       tree->start_old = start_old;
+//       tree->len_old = common_len;
+//       tree->start_new = start_new;
+//       tree->len_new = common_len;
+//       cost += tree->cost;
+
+//       // output_change_set(ctx, CHANGE_TYPE_MOD,
+//       //                   start_old, common_len,
+//       //                   start_new, common_len);
+
+//       // rb_ary_push(rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_MOD, rb_input_old, rb_input_new,
+//       //                                                tokens_old, start_old, common_len,
+//       //                                                tokens_new, start_new, common_len));
+//       start_old += common_len;
+//       start_new += common_len;
+//       len_old -= common_len;
+//       len_new -= common_len;
+//     }
+
+
+//     if(len_old > 0) {
+//       tree_idxs[1] = change_set_tree_array_push(&ctx->change_set_trees);
+//       ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, tree_idxs[1]);
+//       tree->change_type = CHANGE_TYPE_DEL;
+//       tree->cost = len_old;
+//       tree->start_old = start_old;
+//       tree->len_old = len_old;
+//       tree->start_new = 0;
+//       tree->len_new = 0;
+//       cost += tree->cost;
+
+
+//       // rb_ary_push(rb_out_ary, rb_change_set_new(CHANGE_TYPE_DEL, rb_input_old, tokens_old, start_old, len_old));
+//       // output_change_set(ctx, CHANGE_TYPE_DEL,
+//       //                   start_old, len_old,
+//       //                   0, 0);
+//     }
+
+//     if(len_new > 0) {
+//       tree_idxs[2] = change_set_tree_array_push(&ctx->change_set_trees);
+//       ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, tree_idxs[2]);
+//       tree->change_type = CHANGE_TYPE_ADD;
+//       tree->cost = len_new;
+//       tree->start_old = 0;
+//       tree->len_old = 0;
+//       tree->start_new = start_new;
+//       tree->len_new = len_new;
+//       cost += tree->cost;
+//       // rb_ary_push(rb_out_ary, rb_change_set_new(CHANGE_TYPE_ADD, rb_input_new, tokens_new, start_new, len_new));
+//       // output_change_set(ctx, CHANGE_TYPE_ADD,
+//       //                   0, 0,
+//       //                   start_new, len_new);
+//     }
+
+//     if(tree_idxs[0] != 0) {
+//       ret_tree_idx = tree_idxs[0];
+//       ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, ret_tree_idx);
+//       tree->children[0] = tree_idxs[1];
+//       tree->children[1] = tree_idxs[2];
+//       tree->cost = cost;
+//     } else if(tree_idxs[1] != 0) {
+//       ret_tree_idx = tree_idxs[1];
+//       ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, ret_tree_idx);
+//       tree->children[0] = tree_idxs[2];
+//       tree->cost = cost;
+//     } else {
+//       ret_tree_idx = tree_idxs[2];
+//       ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, ret_tree_idx);
+//       tree->cost = cost;
+//     }
+//     // fprintf(stderr, "BASE COST: %lld\n", cost);
+//   } else {
+
+//     assert(best_sub_length <= len_old);
+//     assert(best_sub_length <= len_new);
+
+//     uint64_t best_cost = UINT64_MAX;
+//     // fprintf(stderr, "----------------- %d %d\n", better_matches.len, best_sub_length);
+//     for(uint32_t i = 0; i < better_matches.len; i++) {
+//       BetterMatch *better_match = &better_matches.data[i];
+//       uint32_t sub_length = better_match->sub_len;
+//       bool is_best = sub_length == best_sub_length;
+//       // fprintf(stderr, "%d MATCH WITH %d (%d) (%d)\n", i, better_match->sub_len, is_best, best_sub_length);
+//       if(is_best) {
+
+//         uint32_t sub_start_old = better_match->sub_start_old;
+//         uint32_t sub_start_new = better_match->sub_start_new;
+
+//         uint32_t left_start_old = start_old;
+//         uint32_t left_len_old = sub_start_old - start_old;
+//         uint32_t left_start_new = start_new;
+//         uint32_t left_len_new = sub_start_new - start_new;
+
+//         uint32_t right_start_old = sub_start_old + sub_length;
+//         uint32_t right_len_old = (start_old + len_old) - (sub_start_old + sub_length);
+//         uint32_t right_start_new = sub_start_new + sub_length;
+//         uint32_t right_len_new = (start_new + len_new) - (sub_start_new + sub_length);
+
+//         assert(left_start_old >= start_old);
+//         assert(left_start_old + left_len_old < right_start_old);
+//         assert(right_len_old <= len_old);
+
+//         assert(left_start_new >= start_new);
+//         assert(left_start_new + left_len_new < right_start_new);
+//         assert(right_len_new <= len_new);
+
+//         assert(right_len_new + left_len_new < len_new || right_len_old + right_len_old < len_old);
+
+//         fprintf(stderr, "%ld\n", right_len_new + left_len_new + right_len_old + right_len_old);
+
+//         fprintf(stderr, "N%u_%u__%u_%u -> N%u_%u__%u_%u;\n", start_old, len_old, start_new, len_new,  
+//                                                              left_start_old, left_len_old, left_start_new, left_len_new);
+
+//         // raise(SIGTRAP);
+
+//         uint32_t left_idx = token_diff(ctx, left_start_old, left_len_old, left_start_new, left_len_new);
+
+//         if(ctx->output_eq) {
+
+
+//           // output_change_set(ctx, CHANGE_TYPE_EQL,
+//           //                   sub_start_old, sub_length,
+//           //                   sub_start_new, sub_length);
+
+//           // rb_ary_push(rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_EQL, rb_input_old, rb_input_new,
+//           //                                                tokens_old, sub_start_old, sub_length,
+//           //                                                tokens_new, sub_start_new, sub_length));
+//         }
+
+
+//         fprintf(stderr, "N%u_%u__%u_%u -> N%u_%u__%u_%u;\n", start_old, len_old, start_new, len_new,
+//                                                              right_start_old, right_len_old, right_start_new, right_len_new);
+
+//         uint32_t right_idx = token_diff(ctx, right_start_old, right_len_old, right_start_new, right_len_new);
+
+//         uint64_t cost = ctx->change_set_trees.data[left_idx].cost + ctx->change_set_trees.data[right_idx].cost;
+
+//         if(cost < best_cost) {
+//           ret_tree_idx = change_set_tree_array_push(&ctx->change_set_trees);
+//           ChangeSetTree *tree = change_set_tree_array_get(&ctx->change_set_trees, ret_tree_idx);
+
+//           tree->change_type = CHANGE_TYPE_EQL;
+//           tree->cost = cost;
+//           tree->start_old = sub_start_old;
+//           tree->len_old = best_sub_length;
+//           tree->start_new = sub_start_new;
+//           tree->len_new = best_sub_length;
+//           tree->children[0] = left_idx;
+//           tree->children[1] = right_idx;
+
+//           best_cost = cost;
+//           // fprintf(stderr, "BEST COST: %lld\n", best_cost);
+//         }
+//       }
+//     }
+//     better_match_array_destroy(&better_matches);
+//   }
+
+//   assert(ret_tree_idx != 0);
+//   return ret_tree_idx;
+// }
 
 static void
 rb_change_set_get(ChangeSet *change_set, long index, VALUE *rb_old_token, VALUE *rb_new_token) {
@@ -1322,7 +1457,7 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
     return rb_out_ary;
   }
 
-
+  ctx.rb_out_ary = rb_out_ary;
   ctx.tokens_old = rb_node_tokenize_(rb_old, ignore_whitespace, ignore_comments);
   ctx.tokens_new = rb_node_tokenize_(rb_new, ignore_whitespace, ignore_comments);
 
@@ -1332,11 +1467,11 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
   ssize_t tokens_old_len = (ssize_t) ctx.tokens_old.len;
   ssize_t tokens_new_len = (ssize_t) ctx.tokens_new.len;
 
-  ctx.table_entries_old = RB_ALLOC_N(IndexKey, tokens_old_len);
+  // ctx.table_entries_old = RB_ALLOC_N(IndexKey, tokens_old_len);
 
-  ctx.index_list.capa = ctx.tokens_old.len;
-  ctx.index_list.len = 0;
-  ctx.index_list.entries = RB_ALLOC_N(st_data_t, ctx.index_list.capa);
+  // ctx.index_list.capa = ctx.tokens_old.len;
+  // ctx.index_list.len = 0;
+  // ctx.index_list.entries = RB_ALLOC_N(st_data_t, ctx.index_list.capa);
 
   // for(size_t i = 0; i < tokens_new_len; i++) {
   //   Token *token = &tokens_new[i];
@@ -1347,12 +1482,14 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
   // }
 
 
-  match_map_init(&ctx.match_map, ctx.tokens_old.len);
-  match_map_init(&ctx.next_match_map, ctx.tokens_old.len);
-  change_set_tree_array_init(&ctx.change_set_trees, 512);
+  // match_map_init(&ctx.match_map, ctx.tokens_old.len);
+  // match_map_init(&ctx.next_match_map, ctx.tokens_old.len);
+  // change_set_tree_array_init(&ctx.change_set_trees, 512);
+  // ctx.old_index_map = st_init_table(&type_index_key_hash);
 
-  ctx.old_index_map = st_init_table(&type_index_key_hash);
-
+  path_array_init(&ctx.path_array, 512);
+  token_array_init(&ctx.tmp_tokens_new, 128);
+  token_array_init(&ctx.tmp_tokens_old, 128);
 
   ssize_t prefix_len = 0;
   ssize_t tokens_min_len = MIN(ctx.tokens_old.len, ctx.tokens_new.len);
@@ -1409,9 +1546,17 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
   //                                prefix_len, ctx.tokens_old.len - suffix_len - prefix_len,
   //                                prefix_len, ctx.tokens_new.len - suffix_len - prefix_len);
 
+  ctx.tokens_new_ = ctx.tokens_new.data + prefix_len;
+  ctx.tokens_old_ = ctx.tokens_old.data + prefix_len;
+  token_diff2(&ctx, 0, ctx.tokens_old.len - suffix_len - prefix_len ,
+                    0, ctx.tokens_new.len - suffix_len - prefix_len);
 
-   token_diff2(&ctx, 0, ctx.tokens_old.len,
-                     0, ctx.tokens_new.len);
+
+
+  //  ctx.tokens_new_ = ctx.tokens_new.data;
+  //  ctx.tokens_old_ = ctx.tokens_old.data;
+  //  token_diff2(&ctx, 0, ctx.tokens_old.len,
+  //                 0, ctx.tokens_new.len);
 
   // uint32_t tree_idx = token_diff(&ctx,
   //                                prefix_len, ctx.tokens_old.len - suffix_len - prefix_len,
@@ -1428,12 +1573,11 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
 done:
   // st_free_table(match_map);
   // st_free_table(next_match_map);
-  match_map_destroy(&ctx.match_map);
-  match_map_destroy(&ctx.next_match_map);
-  change_set_tree_array_destroy(&ctx.change_set_trees);
-  st_free_table(ctx.old_index_map);
-  xfree(ctx.table_entries_old);
-  xfree(ctx.index_list.entries);
+  // match_map_destroy(&ctx.match_map);
+  // match_map_destroy(&ctx.next_match_map);
+  path_array_destroy(&ctx.path_array);
+  token_array_destroy(&ctx.tmp_tokens_new);
+  token_array_destroy(&ctx.tmp_tokens_old);
   xfree(ctx.tokens_old.data);
   xfree(ctx.tokens_new.data);
 
