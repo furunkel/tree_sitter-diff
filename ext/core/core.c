@@ -1,4 +1,6 @@
 #include "ruby.h"
+#include "ruby/internal/special_consts.h"
+#include "ruby/internal/value_type.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -13,10 +15,10 @@ VALUE rb_mTSDiff;
 VALUE rb_cChangeSet;
 VALUE rb_eTsDiffError;
 
-static ID id_eq;
+static ID id_eql;
 static ID id_add;
 static ID id_del;
-static ID id_mod;
+static ID id_sub;
 
 #ifndef MAX
 #define MAX(a,b) (((a)<(b))?(b):(a))
@@ -59,11 +61,13 @@ typedef struct TmpTokenArray {
   bool non_eq;
 } TmpTokenArray;
 
+typedef struct {} Tree;
+
 TokenArray rb_node_tokenize_(VALUE self, VALUE rb_ignore_whitespace, VALUE rb_ignore_comments);
 const char *rb_node_input_(VALUE self, uint32_t *start, uint32_t *len);
 VALUE rb_new_token_from_ptr(Token *orig_token);
 void tree_sitter_token_mark(Token *token);
-
+Tree *rb_tree_unwrap(VALUE self);
 // typedef struct {
 //   uint32_t capa;
 //   uint32_t len;
@@ -90,7 +94,7 @@ typedef enum {
   CHANGE_TYPE_ADD,
   CHANGE_TYPE_DEL,
   CHANGE_TYPE_EQL,
-  CHANGE_TYPE_MOD,
+  CHANGE_TYPE_SUB,
 } ChangeType;
 
 // typedef struct {
@@ -167,6 +171,7 @@ typedef struct DiffContext {
   VALUE rb_old;
   VALUE rb_new;
   bool output_eq;
+  bool output_replace;
   bool split_lines;
   Callback cb;
   TmpTokenArray tmp_tokens_old;
@@ -498,6 +503,7 @@ path_array_push(PathArray *path_array, Path **path) {
     path_array->capa = new_capa;
   }
   uint32_t index = path_array->len;
+  path_array->data[index] = (Path) {0, };
   *path = &path_array->data[index];
   path_array->len++;
   return index;
@@ -559,8 +565,6 @@ rb_change_set_new_full(ChangeType change_type, VALUE rb_old, VALUE rb_new,
 
 static void
 output_change_set(DiffContext *ctx) {
-  ChangeType change_type;
-
   if(ctx->tmp_tokens_new.len == 0) {
     if(ctx->tmp_tokens_old.len == 0) return;
     rb_ary_push(ctx->rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_DEL, ctx->rb_old, Qnil,
@@ -579,9 +583,18 @@ output_change_set(DiffContext *ctx) {
                                                           ctx->tmp_tokens_old.data, 0, ctx->tmp_tokens_old.len,
                                                           ctx->tmp_tokens_new.data, 0, ctx->tmp_tokens_new.len));
     } else {
-      rb_ary_push(ctx->rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_MOD, ctx->rb_old, ctx->rb_new,
-                                                          ctx->tmp_tokens_old.data, 0, ctx->tmp_tokens_old.len,
-                                                          ctx->tmp_tokens_new.data, 0, ctx->tmp_tokens_new.len));
+      if(ctx->output_replace) {
+        rb_ary_push(ctx->rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_SUB, ctx->rb_old, ctx->rb_new,
+                                                            ctx->tmp_tokens_old.data, 0, ctx->tmp_tokens_old.len,
+                                                            ctx->tmp_tokens_new.data, 0, ctx->tmp_tokens_new.len));
+      } else {
+        rb_ary_push(ctx->rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_DEL, ctx->rb_old, Qnil,
+                                                        ctx->tmp_tokens_old.data, 0, ctx->tmp_tokens_old.len,
+                                                        NULL, 0, 0));
+        rb_ary_push(ctx->rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_ADD, Qnil, ctx->rb_new,
+                                                        NULL, 0, 0,
+                                                        ctx->tmp_tokens_new.data, 0, ctx->tmp_tokens_new.len));
+      }
 
       /* FIXME: we have a choice how to align old and new here
          at this point it stupidliy aligns at the beginning */
@@ -1024,18 +1037,18 @@ collect_change_sets(DiffContext *ctx, CallbackType type, Token *token_old, Token
       tmp_token_array_reset(&ctx->tmp_tokens_old);
       break;
     case CALLBACK_FINISH:
-      fprintf(stderr, "FINISH\n");
+      // fprintf(stderr, "FINISH\n");
       output_change_set(ctx);
       break;
     case CALLBACK_DEL:
-      fprintf(stderr, "token_old DEL (%d): %d-%d %.*s\n", token_old->implicit, token_old->start_byte, token_old->end_byte, token_old->end_byte - token_old->start_byte, ctx->input_old + token_old->start_byte);
+      // fprintf(stderr, "token_old DEL (%d): %d-%d %.*s\n", token_old->implicit, token_old->start_byte, token_old->end_byte, token_old->end_byte - token_old->start_byte, ctx->input_old + token_old->start_byte);
       add_tmp_token(&ctx->tmp_tokens_old, *token_old, type);
       break;
     case CALLBACK_EQ:
       output_change_set(ctx);
-      fprintf(stderr, "token EQ (%d): %.*s\n", token_old->implicit, token_old->end_byte - token_old->start_byte, ctx->input_old + token_old->start_byte);
-      fprintf(stderr, "token EQ (%d): %.*s\n", token_new->implicit, token_new->end_byte - token_new->start_byte, ctx->input_new + token_new->start_byte);
-      fprintf(stderr, "RESET\n");
+      // fprintf(stderr, "token EQ (%d): %.*s\n", token_old->implicit, token_old->end_byte - token_old->start_byte, ctx->input_old + token_old->start_byte);
+      // fprintf(stderr, "token EQ (%d): %.*s\n", token_new->implicit, token_new->end_byte - token_new->start_byte, ctx->input_new + token_new->start_byte);
+      // fprintf(stderr, "RESET\n");
       tmp_token_array_reset(&ctx->tmp_tokens_new);
       tmp_token_array_reset(&ctx->tmp_tokens_old);
       if(ctx->output_eq) {
@@ -1044,7 +1057,7 @@ collect_change_sets(DiffContext *ctx, CallbackType type, Token *token_old, Token
       }
       break;
     case CALLBACK_INS:
-      fprintf(stderr, "token_new INS (%d): %.*s\n", token_new->implicit, token_new->end_byte - token_new->start_byte, ctx->input_new + token_new->start_byte);
+      // fprintf(stderr, "token_new INS (%d): %.*s\n", token_new->implicit, token_new->end_byte - token_new->start_byte, ctx->input_new + token_new->start_byte);
       add_tmp_token(&ctx->tmp_tokens_new, *token_new, type);
       break;
   }
@@ -1384,7 +1397,7 @@ rb_change_set_get(ChangeSet *change_set, long index, VALUE *rb_old_token, VALUE 
 
   switch(change_set->change_type) {
     case CHANGE_TYPE_EQL:
-    case CHANGE_TYPE_MOD:
+    case CHANGE_TYPE_SUB:
       *rb_old_token = index < change_set->old_len ? rb_new_token_from_ptr(&change_set->old_tokens[index]) : Qnil;
       *rb_new_token = index < change_set->new_len ? rb_new_token_from_ptr(&change_set->new_tokens[index]) : Qnil;
       break;
@@ -1464,10 +1477,10 @@ rb_change_set_type(VALUE self) {
       type_id = id_del;
       break;
     case CHANGE_TYPE_EQL:
-      type_id = id_eq;
+      type_id = id_eql;
       break;
-    case CHANGE_TYPE_MOD:
-      type_id = id_mod;
+    case CHANGE_TYPE_SUB:
+      type_id = id_sub;
       break;
     default:
       return Qnil;
@@ -1478,7 +1491,7 @@ rb_change_set_type(VALUE self) {
 
 static VALUE
 rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
-                  VALUE rb_output_eq, VALUE rb_ignore_whitespace, VALUE rb_ignore_comments) {
+                  VALUE rb_output_eq, VALUE rb_output_replace, VALUE rb_ignore_whitespace, VALUE rb_ignore_comments) {
 
   // FIXME: check node
   // Check_Type(rb_old, T_STRING);
@@ -1487,6 +1500,7 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
   DiffContext ctx;
 
   ctx.output_eq = RB_TEST(rb_output_eq);
+  ctx.output_replace = RB_TEST(rb_output_replace);
   ctx.split_lines = false; //RB_TEST(rb_split_lines);
   bool ignore_whitespace = RB_TEST(rb_ignore_whitespace);
   bool ignore_comments = RB_TEST(rb_ignore_comments);
@@ -1661,6 +1675,43 @@ rb_change_set_each(VALUE self)
   return self;
 }
 
+typedef enum {
+  PQ_ACTION_NONE,
+  PQ_ACTION_INSERT,
+  PQ_ACTION_DELETE,
+} PQAction;
+
+
+void
+rb_node_pq_profile_(TSNode node, Tree *tree, PQAction action, VALUE rb_p, VALUE rb_q, VALUE rb_include_root_ancestors, VALUE rb_raw, VALUE rb_max_depth, VALUE rb_profile);
+
+static void
+tokens_to_pq_profile(Token *tokens, size_t tokens_len, PQAction action, VALUE rb_p, VALUE rb_q, VALUE rb_include_root_ancestors, VALUE rb_raw, VALUE rb_max_depth, VALUE rb_profile) {
+  for(size_t i = 0; i < tokens_len; i++) {
+    Token *token = &tokens[i];
+    Tree *tree = rb_tree_unwrap(token->rb_tree);
+    rb_node_pq_profile_(token->ts_node, tree, action, rb_p, rb_q, rb_include_root_ancestors, rb_raw, rb_max_depth, rb_profile); 
+  }
+}
+
+static VALUE
+rb_change_set_pq_profile(VALUE self, VALUE rb_p, VALUE rb_q, VALUE rb_profile, VALUE rb_include_root_ancestors, VALUE rb_raw, VALUE rb_max_depth)
+{
+  ChangeSet *change_set;
+  TypedData_Get_Struct(self, ChangeSet, &change_set_type, change_set);
+
+  if(RB_NIL_P(rb_profile)) {
+    rb_profile = rb_ary_new_capa(64);
+  } else {
+    Check_Type(rb_profile, RUBY_T_ARRAY);
+  }
+  tokens_to_pq_profile(change_set->old_tokens, change_set->old_len, PQ_ACTION_DELETE, rb_p, rb_q, rb_include_root_ancestors, rb_raw, rb_max_depth, rb_profile);
+  tokens_to_pq_profile(change_set->new_tokens, change_set->new_len, PQ_ACTION_INSERT, rb_p, rb_q, rb_include_root_ancestors, rb_raw, rb_max_depth, rb_profile);
+
+  return rb_profile;
+}
+
+
 static VALUE
 rb_change_set_old(VALUE self)
 {
@@ -1702,14 +1753,14 @@ Init_core()
 {
   id_add = rb_intern("+");
   id_del = rb_intern("-");
-  id_eq = rb_intern("=");
-  id_mod = rb_intern("!");
+  id_eql = rb_intern("=");
+  id_sub = rb_intern("!");
 
   VALUE rb_mTreeSitter = rb_define_module("TreeSitter");
   rb_mTSDiff = rb_define_module_under(rb_mTreeSitter, "Diff");
   rb_eTsDiffError = rb_define_class_under(rb_mTSDiff, "Error", rb_eStandardError);
 
-  rb_define_singleton_method(rb_mTSDiff, "__diff__", rb_ts_diff_diff_s, 5);
+  rb_define_singleton_method(rb_mTSDiff, "__diff__", rb_ts_diff_diff_s, 6);
 
   rb_cChangeSet = rb_define_class_under(rb_mTSDiff, "ChangeSet", rb_cObject);
 
@@ -1720,6 +1771,7 @@ Init_core()
   rb_define_method(rb_cChangeSet, "old", rb_change_set_old, 0);
   rb_define_method(rb_cChangeSet, "new", rb_change_set_new_m, 0);
   rb_define_method(rb_cChangeSet, "each", rb_change_set_each, 0);
+  rb_define_method(rb_cChangeSet, "__pq_profile__", rb_change_set_pq_profile, 6);
   rb_include_module(rb_cChangeSet, rb_mEnumerable);
 
   // rb_define_method(rb_cToken, "==", rb_token_eql, 1);
