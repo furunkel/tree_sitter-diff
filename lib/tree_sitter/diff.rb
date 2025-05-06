@@ -17,8 +17,8 @@ module TreeSitter
         "#<#{self.class} #{type} [#{peek}#{size > peek_size ? ', ...' : ''}]>"
       end
 
-      def pq_profile(p, q, profile = nil, include_root_ancestors: true, raw: false, max_depth: 3)
-        __pq_profile__(p, q, profile, include_root_ancestors, raw, max_depth)
+      def pq_profile(p, q, profile = nil, include_root_ancestors: true, raw: false, pairs: false, named_only: true, max_depth: 3)
+        __pq_profile__(p, q, profile, include_root_ancestors, raw, pairs, named_only, max_depth)
       end
     end
   end

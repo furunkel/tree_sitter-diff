@@ -1611,12 +1611,23 @@ rb_ts_diff_diff_s(VALUE self, VALUE rb_old, VALUE rb_new,
   //                                prefix_len, ctx.tokens_old.len - suffix_len - prefix_len,
   //                                prefix_len, ctx.tokens_new.len - suffix_len - prefix_len);
 
+  if(ctx.output_eq && prefix_len > 0) {
+      rb_ary_push(ctx.rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_EQL, ctx.rb_old, ctx.rb_new,
+                                                          ctx.tokens_old.data, 0, prefix_len,
+                                                          ctx.tokens_new.data, 0, prefix_len));
+  }
+
   ctx.tokens_new_ = ctx.tokens_new.data + prefix_len;
   ctx.tokens_old_ = ctx.tokens_old.data + prefix_len;
   token_diff2(&ctx, 0, ctx.tokens_old.len - suffix_len - prefix_len ,
                     0, ctx.tokens_new.len - suffix_len - prefix_len);
 
 
+  if(ctx.output_eq && suffix_len > 0) {
+    rb_ary_push(ctx.rb_out_ary, rb_change_set_new_full(CHANGE_TYPE_EQL, ctx.rb_old, ctx.rb_new,
+                                                        ctx.tokens_old.data, ctx.tokens_old.len - suffix_len, suffix_len,
+                                                        ctx.tokens_new.data, ctx.tokens_new.len - suffix_len, suffix_len));
+  }
 
   //  ctx.tokens_new_ = ctx.tokens_new.data;
   //  ctx.tokens_old_ = ctx.tokens_old.data;
@@ -1683,19 +1694,19 @@ typedef enum {
 
 
 void
-rb_node_pq_profile_(TSNode node, Tree *tree, PQAction action, VALUE rb_p, VALUE rb_q, VALUE rb_include_root_ancestors, VALUE rb_raw, VALUE rb_max_depth, VALUE rb_profile);
+rb_node_pq_profile_(TSNode node, Tree *tree, PQAction action, VALUE rb_p, VALUE rb_q, VALUE rb_include_root_ancestors, VALUE rb_raw, VALUE rb_pairs, VALUE rb_only_named, VALUE rb_max_depth, VALUE rb_profile);
 
 static void
-tokens_to_pq_profile(Token *tokens, size_t tokens_len, PQAction action, VALUE rb_p, VALUE rb_q, VALUE rb_include_root_ancestors, VALUE rb_raw, VALUE rb_max_depth, VALUE rb_profile) {
+tokens_to_pq_profile(Token *tokens, size_t tokens_len, PQAction action, VALUE rb_p, VALUE rb_q, VALUE rb_include_root_ancestors, VALUE rb_raw, VALUE rb_pairs, VALUE rb_only_named, VALUE rb_max_depth, VALUE rb_profile) {
   for(size_t i = 0; i < tokens_len; i++) {
     Token *token = &tokens[i];
     Tree *tree = rb_tree_unwrap(token->rb_tree);
-    rb_node_pq_profile_(token->ts_node, tree, action, rb_p, rb_q, rb_include_root_ancestors, rb_raw, rb_max_depth, rb_profile); 
+    rb_node_pq_profile_(token->ts_node, tree, action, rb_p, rb_q, rb_include_root_ancestors, rb_raw, rb_pairs, rb_only_named, rb_max_depth, rb_profile); 
   }
 }
 
 static VALUE
-rb_change_set_pq_profile(VALUE self, VALUE rb_p, VALUE rb_q, VALUE rb_profile, VALUE rb_include_root_ancestors, VALUE rb_raw, VALUE rb_max_depth)
+rb_change_set_pq_profile(VALUE self, VALUE rb_p, VALUE rb_q, VALUE rb_profile, VALUE rb_include_root_ancestors, VALUE rb_raw, VALUE rb_pairs, VALUE rb_named_only, VALUE rb_max_depth)
 {
   ChangeSet *change_set;
   TypedData_Get_Struct(self, ChangeSet, &change_set_type, change_set);
@@ -1705,8 +1716,8 @@ rb_change_set_pq_profile(VALUE self, VALUE rb_p, VALUE rb_q, VALUE rb_profile, V
   } else {
     Check_Type(rb_profile, RUBY_T_ARRAY);
   }
-  tokens_to_pq_profile(change_set->old_tokens, change_set->old_len, PQ_ACTION_DELETE, rb_p, rb_q, rb_include_root_ancestors, rb_raw, rb_max_depth, rb_profile);
-  tokens_to_pq_profile(change_set->new_tokens, change_set->new_len, PQ_ACTION_INSERT, rb_p, rb_q, rb_include_root_ancestors, rb_raw, rb_max_depth, rb_profile);
+  tokens_to_pq_profile(change_set->old_tokens, change_set->old_len, PQ_ACTION_DELETE, rb_p, rb_q, rb_include_root_ancestors, rb_raw, rb_pairs, rb_named_only, rb_max_depth, rb_profile);
+  tokens_to_pq_profile(change_set->new_tokens, change_set->new_len, PQ_ACTION_INSERT, rb_p, rb_q, rb_include_root_ancestors, rb_raw, rb_pairs, rb_named_only, rb_max_depth, rb_profile);
 
   return rb_profile;
 }
@@ -1749,7 +1760,7 @@ rb_change_set_new_m(VALUE self)
 }
 
 void
-Init_core()
+Init_core(void)
 {
   id_add = rb_intern("+");
   id_del = rb_intern("-");
@@ -1763,6 +1774,7 @@ Init_core()
   rb_define_singleton_method(rb_mTSDiff, "__diff__", rb_ts_diff_diff_s, 6);
 
   rb_cChangeSet = rb_define_class_under(rb_mTSDiff, "ChangeSet", rb_cObject);
+  rb_undef_alloc_func(rb_cChangeSet);
 
   rb_define_method(rb_cChangeSet, "[]", rb_change_set_aref, 1);
   rb_define_method(rb_cChangeSet, "size", rb_change_set_size, 0);
@@ -1771,7 +1783,7 @@ Init_core()
   rb_define_method(rb_cChangeSet, "old", rb_change_set_old, 0);
   rb_define_method(rb_cChangeSet, "new", rb_change_set_new_m, 0);
   rb_define_method(rb_cChangeSet, "each", rb_change_set_each, 0);
-  rb_define_method(rb_cChangeSet, "__pq_profile__", rb_change_set_pq_profile, 6);
+  rb_define_method(rb_cChangeSet, "__pq_profile__", rb_change_set_pq_profile, 8);
   rb_include_module(rb_cChangeSet, rb_mEnumerable);
 
   // rb_define_method(rb_cToken, "==", rb_token_eql, 1);
